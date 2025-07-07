@@ -5,7 +5,7 @@ CONTEXT ANALYSIS:
 - User's previous research topics and memories: {memory}
 - Previous conversation history: {history}
 - Current query: {query}
-- currently the user is accesing : {user_context} 
+- the user query answer from the given graph is: {user_context} 
 
 RESPONSE GUIDELINES:
 1. ANALYZE the query in relation to context and history

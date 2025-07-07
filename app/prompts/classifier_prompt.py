@@ -1,4 +1,32 @@
-classifier_prompt = """
+final_response = """
+You are an AI assistant helping a user.
+
+User Query:
+{query}
+
+Relevant Graph-based Information:
+{graph_answer}
+
+Agent Response:
+{agent_response}
+If you find a succesful response from the agent and if the response from the graph is irrelevant 
+return as agent:the response
+if you can find respose from the graph answer only and agent response is failed return  graph:graph_answer
+if an answer is from both return as agent:the response,graph:graph_answer
+"""
+
+answer_from_graph ="""
+            You are an assistant that answers questions about biological graphs. 
+            Answer the question ONLY if it can be answered from the provided graph summary.
+            
+            User query: {query}
+            Graph summary: {summary}
+            
+            If the question can be answered from the graph summary, provide a concise answer (2-4 sentences).
+            If not, respond with exactly: "I couldn't answer this from the given graph."
+            """
+
+classifier_prompt ="""
 You are an intelligent system that first classifies if a user's query is related to a specific biological graph/network, and then answers related queries directly.
 
 INPUT:
@@ -60,3 +88,4 @@ Example 3 (RELATED - general explanation request):
 - Graph summary: "BTBD3 gene on chromosome 20 with two source node connections."
 - Output: "related: BTBD3 network showing basic connectivity with two source nodes on chromosome 20."
 """
+
