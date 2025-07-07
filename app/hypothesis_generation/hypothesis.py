@@ -2,7 +2,7 @@
 from typing import Dict, Any, Tuple, Optional, List, Union
 from app.prompts.hypothesis_prompt import hypothesis_format_prompt,hypothesis_response
 from app.storage.sql_redis_storage import RedisGraphManager
-from socket_manager import emit_to_user
+from app.socket_manager import emit_to_user
 import logging
 import os
 import difflib
@@ -345,8 +345,8 @@ class HypothesisGeneration:
         
         if "error" in enriched_data:
             logger.error(f"Failed to enrich hypothesis data: {enriched_data['error']}")
-            emit_to_user(f"No hypothesis is")
-            return {"text": f"No hypothesis is found: {enriched_data['error']}",,status="completed"}
+            emit_to_user(f"No hypothesis is Found",status="completed")
+            return {"text": f"No hypothesis is found: {enriched_data['error']}"}
         
         # Generate final response
         logger.info("Generating final hypothesis response")

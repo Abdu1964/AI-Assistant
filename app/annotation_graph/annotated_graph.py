@@ -79,7 +79,7 @@ class Graph:
             relevant_information = self._extract_relevant_information(query)
             
             # Convert to initial JSON
-            self.emit_to_user('Validating Constructed Json Format...', user_id)
+            emit_to_user('Validating Constructed Json Format...', user_id)
             initial_json = self._convert_to_annotation_json(relevant_information, query)
             
             # Validate and update
