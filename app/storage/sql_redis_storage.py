@@ -195,13 +195,13 @@ class DatabaseManager:
 
     async def save_user_information(self,advanced_llm,query,user_id,context=None):
         try:
-            memory_manager = MemoryManager(advanced_llm)
-            memory = memory_manager.add_memory(query, user_id)
-            memory_value = memory[0]['memory'] if memory and len(memory) > 0 else None
+            # memory_manager = MemoryManager(advanced_llm)
+            # memory = memory_manager.add_memory(query, user_id)
+            # memory_value = memory[0]['memory'] if memory and len(memory) > 0 else None
             user_info = self.create_user_information(
                 user_id=user_id,
                 user_question=query,
-                memory=memory_value,
+                memory="",
                 context=context)
             print(f"Saved user information with question_id: {user_info.question_id}, {user_info.user_question} {user_info.memory} {user_info.context}")
             return user_info
