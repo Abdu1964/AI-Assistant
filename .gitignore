@@ -10,3 +10,5 @@ history.json
 logfiles
 data
 test.py
+storage/
+rag_user_pdf.json
