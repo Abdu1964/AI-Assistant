@@ -291,14 +291,14 @@ class AiAssistance:
                 final_response = result.strip('"')
                 await self.store.save_user_information(self.advanced_llm, query, user_id, context)
                 self.history.create_history(user_id, query, final_response)
-                emit_to_user(final_response,status="completed")
+                emit_to_user(message=final_response,status="completed")
                 return {"text": final_response}
                 
             elif "question:" in response:
                 refactored_question = response.split("question:")[1].strip()
                 await self.store.save_user_information(self.advanced_llm, query, user_id, context)
                 agent_response = self.agent(refactored_question, user_id, token)
-                emit_to_user(agent_response,status="completed")
+                emit_to_user(message=agent_response,status="completed")
                 return agent_response
             else:
                 logger.warning(f"Unexpected response format: {response}")
