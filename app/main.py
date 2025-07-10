@@ -4,7 +4,7 @@ from .annotation_graph.annotated_graph import Graph
 from app.annotation_graph.schema_handler import SchemaHandler
 from app.rag.rag import RAG
 from app.prompts.conversation_handler import conversation_prompt
-from app.prompts.classifier_prompt import classifier_prompt,answer_from_graph,final_response
+from app.prompts.classifier_prompt import classifier_prompt,answer_from_graph
 from app.summarizer import Graph_Summarizer
 from app.hypothesis_generation.hypothesis import HypothesisGeneration
 from app.storage.history import History
@@ -139,9 +139,9 @@ class AiAssistance:
         query = state["user_query"]
         
         classifier_prompt = f"""Classify this query into one of these categories:
-        - annotation: Requests for factual information about genes, proteins, variants
-        - hypothesis: Requests for explanations, mechanisms, or predictions
-        - rag: General information requests about Rejuve
+        - annotation: Requests for factual information about genes, proteins, variants,
+        - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
+        - rag: General information requests
         Query: {query}
         Respond ONLY with the category name."""
         
@@ -257,7 +257,7 @@ class AiAssistance:
             logger.error("Error in agent processing", exc_info=True)
             return f"Error processing query: {str(e)}"
 
-    async def assistant(self, query, user_id: str, token: str, user_context=None, context=None):
+    async def assistant(self, query, user_id: str, token: str, user_context=None, context=None,graph_id=None):
 
         try:
             user_information = self.store.get_context_and_memory(user_id)
@@ -269,6 +269,12 @@ class AiAssistance:
             history = ""
             memory = ""
             context = ""
+        
+        if graph_id:  
+            logger.info(f"Graph id has been passed to the given query {query} answering based on the graph")
+            graph_response = self.answer_from_graph_summaries(query,user_id,graph_id,context,token)
+            if graph_response:
+                return graph_response
         
         # Use your conversation_prompt here
         prompt = conversation_prompt.format(
@@ -307,7 +313,7 @@ class AiAssistance:
             emit_to_user({"text": error_msg}, status="completed")
             return {"text": error_msg}
     
-    def answer_from_graph_summaries(self,query,graph_id,resource,token):
+    def answer_from_graph_summaries(self,query,user_id,resource,token,graph_id):
         if query:
             logger.debug("Query provided with graph_id")
             summary = None
@@ -319,10 +325,18 @@ class AiAssistance:
                 summary = self.hypothesis_generation.get_by_hypothesis_id(token,graph_id,query)
                 emit_to_user("Analyzing User Query...")
                 logger.info(f"Summaries of the graph id {graph_id} is {summary}")
-            logger.info(f"here is a summary from the given graph id {graph_id} and resource {resource} {summary}")
-            prompt = answer_from_graph.format(query=query,summary=summary)
+            
+            prompt = classifier_prompt.format(query=query, graph_summary=summary)
             response = self.advanced_llm.generate(prompt)
-            return response
+            if response.startswith("related:"):
+                logger.info("question is related with the graph")
+                query_response = response[len("related:"):].strip()
+                # creating users history
+                self.history.create_history(user_id, query, query_response)
+                logger.info(f"user query is {query} response is {query_response}")
+                return {"text":query_response}
+            elif "not" in response:
+                return None
 
         logger.info("Only Graphid is provided")
         if resource == "annotation":
@@ -358,18 +372,9 @@ class AiAssistance:
                 response = self.file_storage(file,query,graph,user_id)
                 return response
 
-            if graph_id:  
-                logger.info("Explaining nodes")
-                graph_response = self.answer_from_graph_summaries(query,graph_id,resource,token)
-                agent_response = asyncio.run(self.assistant(query, user_id, token, user_context=graph_response,context=resource))
-                prompt = final_response.format(query=query,graph_answer=graph_response,agent_response=agent_response)
-                response = self.advanced_llm.generate(prompt)
-                return response
-
-            if query:
-                logger.info(f"agent being called for a given query {query} from resource {resource}")
-                response = asyncio.run(self.assistant(query=query, user_id=user_id, token=token,context=resource))
-                return response 
+            logger.info(f"agent being called for a given query {query} from resource {resource}")
+            response = asyncio.run(self.assistant(query=query, user_id=user_id, token=token,context=resource,graph_id=graph_id))
+            return response 
 
             # if query and graph:
             #     summary = self.graph_summarizer.summary(user_query=query,graph=graph)
