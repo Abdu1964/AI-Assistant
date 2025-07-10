@@ -6,6 +6,8 @@ import os
 from dotenv import load_dotenv
 import logging
 import asyncio
+from app.lib.auth import socket_token_required
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,8 @@ def register_socket_events(socketio_instance):
     """Register event handlers for socket connections."""
     
     @socketio_instance.on('connect')
-    def handle_connect():
+    @socket_token_required
+    def handle_connect(current_user_id,args):
         logger.info(f"Client connected")
         emit('response', {'message': 'Connected successfully'})
     
@@ -123,10 +126,7 @@ def register_socket_events(socketio_instance):
                             responses = ai_assistant.agent(query, user_id, token)
                         
                         logger.info(f"Responses generated for user {user_id}: {responses}")
-                        
-                        # Emit the final response
-                        socketio_instance.emit('query_response', {'response': responses}, room=user_id)
-                        
+                                            
                     except Exception as e:
                         logger.error(f"Error processing question: {e}")
                         socketio_instance.emit('error', {'error': str(e)}, room=user_id)
@@ -144,14 +144,12 @@ def register_socket_events(socketio_instance):
 def get_socketio():
     return socketio
 
-def emit_to_user(message,status="update", user_id=user):
+def emit_to_user(message,status="update"):
     """Helper method to emit updates to user"""
     try:
-        print(f"***************************{user_id}***************************")
         socketio_instance = get_socketio()
         if socketio_instance:
-            socketio_instance.emit(status, {'response': message}, room=user_id)
-            logger.info(f"Emitted to user {user_id}: {message}")
+            socketio_instance.emit('update', {'status':status,'response': message})
     except Exception as e:
-        logger.error(f"Error emitting to user {user_id}: {e}")
+        logger.error(f"Error emitting: {e}")
         
