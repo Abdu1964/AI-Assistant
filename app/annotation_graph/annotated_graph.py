@@ -107,12 +107,6 @@ class Graph:
             TODO
             add query along with job id to specifiy to what query is the json requested is related to.
             '''
-            emit_to_user({
-                    "text": None,
-                    "json_format": validated_json,
-                     "resource": {"id": None, 
-                             "type": "annotation"},}
-                             ,status="completed")
             return {
                     "text": None,
                     "json_format": validated_json,
