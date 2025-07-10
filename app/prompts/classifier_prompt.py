@@ -1,19 +1,3 @@
-final_response = """
-You are an AI assistant helping a user.
-
-User Query:
-{query}
-
-Relevant Graph-based Information:
-{graph_answer}
-
-Agent Response:
-{agent_response}
-If you find a succesful response from the agent and if the response from the graph is irrelevant 
-return as agent:the response
-if you can find respose from the graph answer only and agent response is failed return  graph:graph_answer
-if an answer is from both return as agent:the response,graph:graph_answer
-"""
 
 answer_from_graph ="""
             You are an assistant that answers questions about biological graphs. 
