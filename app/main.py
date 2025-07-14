@@ -1,4 +1,3 @@
-
 from .llm_handle.llm_models import LLMInterface,OpenAIModel,get_llm_model,openai_embedding_model
 from .annotation_graph.annotated_graph import Graph
 from .annotation_graph.schema_handler import SchemaHandler
@@ -60,7 +59,10 @@ class AiAssistance:
         self.history = History()
         self.store = DatabaseManager()
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
-        self.galaxy_handler = GalaxyHandler(advanced_llm)  # You'll need to create this class
+        self.galaxy_handler = GalaxyHandler(advanced_llm)
+        
+        logger.info(f"AiAssistance initialized with advanced_llm: {type(self.advanced_llm).__name__}")
+        logger.info(f"Galaxy handler initialized: {type(self.galaxy_handler).__name__}")
         
         # Initialize the LangGraph workflow
         self.workflow = self._create_workflow()
@@ -69,10 +71,13 @@ class AiAssistance:
     def _create_workflow(self) -> StateGraph:
         """Create the LangGraph workflow"""
         
+        logger.info("Creating LangGraph workflow with tools and nodes")
+        
         # Define tools
         @tool
         def get_json_format(query: str, token: str) -> str:
             """Retrieve the json format provided from the annotation graph tool"""
+            logger.info(f"get_json_format called with query: {query}")
             try:
                 logger.info(f"Generating graph with arguments: {query}")
                 response = self.annotation_graph.validated_json(query)
@@ -84,6 +89,7 @@ class AiAssistance:
         @tool
         def get_general_response(query: str, user_id: str) -> str:
             """Retrieve information for general knowledge queries."""
+            logger.info(f"get_general_response called with query: {query}, user_id: {user_id}")
             try:
                 response = self.rag.get_result_from_rag(query, user_id)
                 return response
@@ -94,6 +100,7 @@ class AiAssistance:
         @tool
         def hypothesis_generation(query: str, token: str) -> str:
             """Generation of hypothesis for biological mechanisms"""
+            logger.info(f"hypothesis_generation called with query: {query}")
             try:
                 logger.info(f"Here is the user query passed to the agent {query}")
                 response = self.hypothesis_generation.generate_hypothesis(token=token, user_query=query)
@@ -106,6 +113,7 @@ class AiAssistance:
         @tool
         def get_galaxy_tools(query: str, user_id: str) -> str:
             """Retrieve information about Galaxy web tools and workflows."""
+            logger.info(f"get_galaxy_tools called with query: {query}, user_id: {user_id}")
             try:
                 # You'll need to implement this method in your galaxy handler
                 response = self.galaxy_handler.get_galaxy_info(query, user_id)
@@ -151,6 +159,7 @@ class AiAssistance:
     
     def _classify_query(self, state: AgentState) -> Dict[str, Any]:
         query = state["user_query"]
+        logger.info(f"Classifying query: {query}")
         
         classifier_prompt = f"""Classify this query into one of these categories:
         - annotation: Requests for factual information about genes, proteins, variants,
@@ -163,6 +172,8 @@ class AiAssistance:
         response = self.advanced_llm.generate(classifier_prompt).lower()
         query_type = response.split()[0]  # Take first word in case LLM adds explanation
         
+        logger.info(f"Query classified as: {query_type}")
+        
         return {
             "query_type": query_type,
             "messages": [HumanMessage(content=f"Query classified as: {query_type}")]
@@ -170,10 +181,13 @@ class AiAssistance:
         
     def _route_query(self, state: AgentState) -> str:
         """Route query based on classification"""
-        return state.get("query_type", "rag")
+        route = state.get("query_type", "rag")
+        logger.info(f"Routing query to: {route}")
+        return route
     
     def _annotation_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle annotation-related queries"""
+        logger.info(f"Annotation agent processing query: {state['user_query']} for user: {state['user_id']}")
         try:
             emit_to_user(user=state["user_id"],message="Creating Query Builder Format...")
             # Use the annotation graph tool
@@ -193,6 +207,7 @@ class AiAssistance:
     
     def _hypothesis_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle hypothesis generation queries"""
+        logger.info(f"Hypothesis agent processing query: {state['user_query']} for user: {state['user_id']}")
         try:
             emit_to_user(user=state["user_query"],message="Generating hypothesis...")
             response = self.hypothesis_generation.generate_hypothesis(
@@ -215,6 +230,7 @@ class AiAssistance:
     
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle general information queries"""
+        logger.info(f"RAG agent processing query: {state['user_query']} for user: {state['user_id']}")
         try:
             emit_to_user(user=state["user_id"],message="Retrieving information...")
             response = self.rag.get_result_from_rag(state["user_query"], state["user_id"])
@@ -230,8 +246,10 @@ class AiAssistance:
                 "error": str(e),
                 "messages": [AIMessage(content=f"Error in RAG processing: {str(e)}")]
             }
+    
     def _galaxy_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle Galaxy tools and workflows queries"""
+        logger.info(f"Galaxy agent processing query: {state['user_query']} for user: {state['user_id']}")
         try:
             emit_to_user(user=state["user_id"], message="Retrieving Galaxy tools information...")
             response = self.galaxy_handler.get_galaxy_info(state["user_query"], state["user_id"])
@@ -251,6 +269,7 @@ class AiAssistance:
     def _finalize_response(self, state: AgentState) -> Dict[str, Any]:
         """Finalize and return the response"""
         response = state.get("response", "No response generated")
+        logger.info(f"Finalizing response for user: {state.get('user_id')}, response length: {len(str(response))}")
         
         return {
             "messages": [AIMessage(content=f"Final response: {response}")]
@@ -258,6 +277,7 @@ class AiAssistance:
     
     def agent(self, message: str, user_id: str, token: str) -> str:
         """Main entry point for processing queries"""
+        logger.info(f"Agent called with message: {message}, user_id: {user_id}")
         try:
             # Create initial state
             initial_state = {
@@ -291,6 +311,7 @@ class AiAssistance:
             return f"Error processing query: {str(e)}"
 
     async def assistant(self, query, user_id: str, token: str, user_context=None, context=None,graph_id=None):
+        logger.info(f"Assistant called with query: {query}, user_id: {user_id}, context: {context}, graph_id: {graph_id}")
 
         try:
             user_information = self.store.get_context_and_memory(user_id)
@@ -347,6 +368,7 @@ class AiAssistance:
             return {"text": error_msg}
     
     def answer_from_graph_summaries(self,query,user_id,resource,token,graph_id):
+        logger.info(f"Answer from graph summaries called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}")
         if query:
             logger.debug("Query provided with graph_id")
             summary = None
@@ -386,6 +408,7 @@ class AiAssistance:
             return {"text": f"Unsupported resource type: '{resource}'"}
 
     def file_storage(self,file,query,graph,user_id):
+        logger.info(f"File storage called with file: {file.filename if file else None}, query: {query}, user_id: {user_id}")
         if (file and query) or (file and graph):
             return {"text":"please pass a file to be uploaded or a query with/without graph ids not both"}
         if file:
@@ -400,6 +423,7 @@ class AiAssistance:
                 return response, 400
 
     def assistant_response(self,query,user_id,token,graph=None,graph_id=None,file=None,resource="annotation",json_query=None):  
+        logger.info(f"Assistant response called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}")
         try:
             logger.info(f"passes parameters are query = {query}, user_id= {user_id}, graphid={graph_id}, graph = {graph}, resource = {resource}")
             if file:
@@ -432,5 +456,3 @@ class AiAssistance:
 
         except:
             traceback.print_exc()
-
-
