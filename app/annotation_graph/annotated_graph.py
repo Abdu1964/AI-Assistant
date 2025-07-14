@@ -79,7 +79,7 @@ class Graph:
             relevant_information = self._extract_relevant_information(query)
             
             # Convert to initial JSON
-            emit_to_user('Validating Constructed Json Format...', user_id)
+            emit_to_user(user=user_id,message=f'Validating Constructed Json Format... {user_id}')
             initial_json = self._convert_to_annotation_json(relevant_information, query)
             
             # Validate and update
@@ -88,11 +88,6 @@ class Graph:
             # If validation failed, return the intermediate steps
             if validation["validation_report"]["validation_status"] == "failed":
                 logger.error("Validation is failing *****sending the intial json format")
-                emit_to_user( {
-                    "text": None,
-                    "json_format": initial_json,
-                     "resource": {"id": None, 
-                             "type": "annotation"},},status="completed")
                 return {
                     "text": None,
                     "json_format": initial_json,

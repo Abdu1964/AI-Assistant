@@ -160,7 +160,7 @@ class AiAssistance:
     def _annotation_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle annotation-related queries"""
         try:
-            emit_to_user("Creating Query Builder Format...")
+            emit_to_user(user=state["user_id"],message="Creating Query Builder Format...")
             # Use the annotation graph tool
             response = self.annotation_graph.validated_json(state["user_query"], user_id=state["user_id"])
             
@@ -179,10 +179,11 @@ class AiAssistance:
     def _hypothesis_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle hypothesis generation queries"""
         try:
-            emit_to_user("Generating hypothesis...")
+            emit_to_user(user=state["user_query"],message="Generating hypothesis...")
             response = self.hypothesis_generation.generate_hypothesis(
                 token=state["token"], 
-                user_query=state["user_query"]
+                user_query=state["user_query"],
+                user_id=state["user_id"]
             )
             
             return {
@@ -200,7 +201,7 @@ class AiAssistance:
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle general information queries"""
         try:
-            emit_to_user("Retrieving information...")
+            emit_to_user(user=state["user_id"],message="Retrieving information...")
             response = self.rag.get_result_from_rag(state["user_query"], state["user_id"])
             
             return {
@@ -284,33 +285,33 @@ class AiAssistance:
             user_context=user_context
         )
         response = self.advanced_llm.generate(prompt)
-        emit_to_user("Analyzing...")
+        emit_to_user(user=user_id,message="Analyzing...")
         if response:
             if "response:" in response:
                 result = response.split("response:")[1].strip()
                 final_response = result.strip('"')
                 await self.store.save_user_information(self.advanced_llm, query, user_id, context)
                 self.history.create_history(user_id, query, final_response)
-                emit_to_user(message=final_response,status="completed")
+                emit_to_user(user=user_id,message=final_response,status="completed")
                 return {"text": final_response}
                 
             elif "question:" in response:
                 refactored_question = response.split("question:")[1].strip()
                 await self.store.save_user_information(self.advanced_llm, query, user_id, context)
                 agent_response = self.agent(refactored_question, user_id, token)
-                emit_to_user(message=agent_response,status="completed")
+                emit_to_user(user=user_id,message=agent_response,status="completed")
                 return agent_response
             else:
                 logger.warning(f"Unexpected response format: {response}")
                 await self.store.save_user_information(self.advanced_llm, query, user_id, context)
-                emit_to_user({"text": response or "I'm sorry, I couldn't process your request properly."},status="completed")
+                emit_to_user(user=user_id,message={"text": response or "I'm sorry, I couldn't process your request properly."},status="completed")
                 return {"text": response or "I'm sorry, I couldn't process your request properly."}
         else:
             logger.error("No response generated from LLM")
             await self.store.save_user_information(self.advanced_llm, query, user_id, context)
-            emit_to_user({"text": "I'm sorry, I couldn't generate a response at this time."},status="completed")
+            emit_to_user(user=user_id,message={"text": "I'm sorry, I couldn't generate a response at this time."},status="completed")
             error_msg = "I apologize, but I encountered an error while processing your request."
-            emit_to_user({"text": error_msg}, status="completed")
+            emit_to_user(user=user_id,message={"text": error_msg}, status="completed")
             return {"text": error_msg}
     
     def answer_from_graph_summaries(self,query,user_id,resource,token,graph_id):
@@ -320,10 +321,11 @@ class AiAssistance:
             if resource == "annotation":
                 # Process summary with query
                 summary = self.graph_summarizer.summary(token=token, graph_id=graph_id)
-                emit_to_user("Analyzing User Query...")
+                emit_to_user(user=user_id,message="Analyzing...")
+
             elif resource == "hypothesis":
                 summary = self.hypothesis_generation.get_by_hypothesis_id(token,graph_id,query)
-                emit_to_user("Analyzing User Query...")
+                emit_to_user(user=user_id,message="Analyzing...")
                 logger.info(f"Summaries of the graph id {graph_id} is {summary}")
             
             prompt = classifier_prompt.format(query=query, graph_summary=summary)
