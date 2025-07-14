@@ -1,15 +1,16 @@
 
 from .llm_handle.llm_models import LLMInterface,OpenAIModel,get_llm_model,openai_embedding_model
 from .annotation_graph.annotated_graph import Graph
-from app.annotation_graph.schema_handler import SchemaHandler
-from app.rag.rag import RAG
-from app.prompts.conversation_handler import conversation_prompt
-from app.prompts.classifier_prompt import classifier_prompt,answer_from_graph
-from app.summarizer import Graph_Summarizer
-from app.hypothesis_generation.hypothesis import HypothesisGeneration
-from app.storage.history import History
-from app.storage.sql_redis_storage import DatabaseManager
-from app.socket_manager import emit_to_user
+from .annotation_graph.schema_handler import SchemaHandler
+from .rag.rag import RAG
+from .prompts.conversation_handler import conversation_prompt
+from .prompts.classifier_prompt import classifier_prompt,answer_from_graph
+from .summarizer import Graph_Summarizer
+from .hypothesis_generation.hypothesis import HypothesisGeneration
+from .storage.history import History
+from .storage.sql_redis_storage import DatabaseManager
+from .socket_manager import emit_to_user
+from .Galaxy_integration.galaxy import GalaxyHandler
 import asyncio
 import logging.handlers as loghandlers
 from dotenv import load_dotenv
@@ -59,6 +60,7 @@ class AiAssistance:
         self.history = History()
         self.store = DatabaseManager()
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
+        self.galaxy_handler = GalaxyHandler(advanced_llm)  # You'll need to create this class
         
         # Initialize the LangGraph workflow
         self.workflow = self._create_workflow()
@@ -100,10 +102,19 @@ class AiAssistance:
                 logger.error("Error in hypothesis generation", exc_info=True)
                 traceback.print_exc()
                 return "Error in generating hypothesis."
-        
-        # Store tools for later use
-        self.tools = [get_json_format, get_general_response, hypothesis_generation]
-        
+
+        @tool
+        def get_galaxy_tools(query: str, user_id: str) -> str:
+            """Retrieve information about Galaxy web tools and workflows."""
+            try:
+                # You'll need to implement this method in your galaxy handler
+                response = self.galaxy_handler.get_galaxy_info(query, user_id)
+                return response
+            except Exception as e:
+                logger.error("Error in galaxy tools retrieval", exc_info=True)
+                return "Error retrieving Galaxy tools information."
+                
+        self.tools = [get_json_format, get_general_response, hypothesis_generation, get_galaxy_tools]
         # Create workflow
         workflow = StateGraph(AgentState)
         
@@ -112,6 +123,7 @@ class AiAssistance:
         workflow.add_node("annotation_agent", self._annotation_agent)
         workflow.add_node("hypothesis_agent", self._hypothesis_agent)
         workflow.add_node("rag_agent", self._rag_agent)
+        workflow.add_node("galaxy_agent", self._galaxy_agent)
         workflow.add_node("finalizer", self._finalize_response)
         
         # Define edges
@@ -124,6 +136,7 @@ class AiAssistance:
                 "annotation": "annotation_agent",
                 "hypothesis": "hypothesis_agent",
                 "rag": "rag_agent",
+                "galaxy": "galaxy_agent",
                 "error": "finalizer"
             }
         )
@@ -131,6 +144,7 @@ class AiAssistance:
         workflow.add_edge("annotation_agent", "finalizer")
         workflow.add_edge("hypothesis_agent", "finalizer")
         workflow.add_edge("rag_agent", "finalizer")
+        workflow.add_edge("galaxy_agent", "finalizer")
         workflow.add_edge("finalizer", END)
         
         return workflow
@@ -141,6 +155,7 @@ class AiAssistance:
         classifier_prompt = f"""Classify this query into one of these categories:
         - annotation: Requests for factual information about genes, proteins, variants,
         - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
+        - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
         - rag: General information requests
         Query: {query}
         Respond ONLY with the category name."""
@@ -215,7 +230,24 @@ class AiAssistance:
                 "error": str(e),
                 "messages": [AIMessage(content=f"Error in RAG processing: {str(e)}")]
             }
-    
+    def _galaxy_agent(self, state: AgentState) -> Dict[str, Any]:
+        """Handle Galaxy tools and workflows queries"""
+        try:
+            emit_to_user(user=state["user_id"], message="Retrieving Galaxy tools information...")
+            response = self.galaxy_handler.get_galaxy_info(state["user_query"], state["user_id"])
+            
+            return {
+                "response": response,
+                "messages": [AIMessage(content=f"Galaxy query processed: {response}")]
+            }
+        except Exception as e:
+            logger.error("Error in galaxy agent", exc_info=True)
+            return {
+                "response": f"Error retrieving Galaxy information: {str(e)}",
+                "error": str(e),
+                "messages": [AIMessage(content=f"Error in Galaxy processing: {str(e)}")]
+            }
+
     def _finalize_response(self, state: AgentState) -> Dict[str, Any]:
         """Finalize and return the response"""
         response = state.get("response", "No response generated")
