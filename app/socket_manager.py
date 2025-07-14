@@ -144,12 +144,12 @@ def register_socket_events(socketio_instance):
 def get_socketio():
     return socketio
 
-def emit_to_user(message,status="update"):
+def emit_to_user(user,message,status="update"):
     """Helper method to emit updates to user"""
     try:
         socketio_instance = get_socketio()
         if socketio_instance:
-            socketio_instance.emit('update', {'status':status,'response': message})
+            socketio_instance.emit('update', {'status':status,'response': message},to=user)
     except Exception as e:
         logger.error(f"Error emitting: {e}")
         
