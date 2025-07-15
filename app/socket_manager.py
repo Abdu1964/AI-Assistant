@@ -16,20 +16,34 @@ load_dotenv()
 
 # Initialize SocketIO with Redis integration for scaling
 socketio = None
+redis_client = None
 user = None
-
 def init_socketio(app):
     """Initialize the SocketIO instance with Redis message queue for scaling."""
-    global socketio
-    redis_url = os.getenv('REDIS_URL', 'redis://redis:6379/0')    
+    global socketio, redis_client
+    
+    # Check if Redis is configured
+    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    redis_enabled = os.getenv('ENABLE_REDIS', 'true').lower() == 'true'
+    
+    logger.info(f"Initializing SocketIO with Redis: {redis_enabled}")
     
     try:
-        socketio = SocketIO(
-            app, 
-            message_queue=redis_url, 
-            cors_allowed_origins="*",
-            async_mode='eventlet')
-        logger.info(f"SocketIO initialized with Redis message queue at {redis_url}")
+        if redis_enabled:
+            # Setup Redis client
+            redis_client = redis.from_url(redis_url)
+            socketio = SocketIO(
+                app, 
+                message_queue=redis_url, 
+                cors_allowed_origins="*",
+                async_mode='eventlet'
+            )
+            logger.info(f"SocketIO initialized with Redis message queue at {redis_url}")
+        else:
+            socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+            logger.info("SocketIO initialized without Redis message queue")
+            
+        # Register socket event handlers
         register_socket_events(socketio)
         return socketio
     except Exception as e:
@@ -62,6 +76,9 @@ def register_socket_events(socketio_instance):
         if user_id:
             join_room(user_id)
             logger.info(f"User {user_id} joined room")
+            if redis_client:
+                cache_key = f'{user_id}_room'
+                redis_client.set(cache_key, json.dumps({'user_id': user_id}))
             emit('response', {'response': f'user {user_id} joined room'}, room=user_id)
 
 
