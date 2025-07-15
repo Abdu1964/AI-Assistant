@@ -353,6 +353,7 @@ class AiAssistance:
                 await self.store.save_user_information(self.advanced_llm, query, user_id, context)
                 agent_response = self.agent(refactored_question, user_id, token)
                 emit_to_user(user=user_id,message=agent_response,status="completed")
+                self.history.create_history(user_id, query, agent_response)
                 return agent_response
             else:
                 logger.warning(f"Unexpected response format: {response}")
