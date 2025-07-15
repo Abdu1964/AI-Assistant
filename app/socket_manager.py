@@ -1,6 +1,6 @@
 
 from flask_socketio import SocketIO, emit, send, disconnect, join_room
-from flask import Session
+from flask import session
 import redis
 import json
 import os
@@ -16,34 +16,20 @@ load_dotenv()
 
 # Initialize SocketIO with Redis integration for scaling
 socketio = None
-redis_client = None
 user = None
+
 def init_socketio(app):
     """Initialize the SocketIO instance with Redis message queue for scaling."""
-    global socketio, redis_client
-    
-    # Check if Redis is configured
-    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    redis_enabled = os.getenv('ENABLE_REDIS', 'true').lower() == 'true'
-    
-    logger.info(f"Initializing SocketIO with Redis: {redis_enabled}")
+    global socketio
+    redis_url = os.getenv('REDIS_URL', 'redis://redis:6379/0')    
     
     try:
-        if redis_enabled:
-            # Setup Redis client
-            redis_client = redis.from_url(redis_url)
-            socketio = SocketIO(
-                app, 
-                message_queue=redis_url, 
-                cors_allowed_origins="*",
-                async_mode='eventlet'
-            )
-            logger.info(f"SocketIO initialized with Redis message queue at {redis_url}")
-        else:
-            socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
-            logger.info("SocketIO initialized without Redis message queue")
-            
-        # Register socket event handlers
+        socketio = SocketIO(
+            app, 
+            message_queue=redis_url, 
+            cors_allowed_origins="*",
+            async_mode='eventlet')
+        logger.info(f"SocketIO initialized with Redis message queue at {redis_url}")
         register_socket_events(socketio)
         return socketio
     except Exception as e:
@@ -61,8 +47,8 @@ def register_socket_events(socketio_instance):
     @socket_token_required
     def handle_connect(current_user_id,token,args):
         logger.info(f"Client connected")
-        Session['user_id']= current_user_id
-        Session['token'] = token 
+        session['user_id']= current_user_id
+        session['token'] = token 
         emit('response', {'message': 'Connected successfully'})
     
     @socketio_instance.on('disconnect')
@@ -72,13 +58,10 @@ def register_socket_events(socketio_instance):
     @socketio_instance.on('join_room')
     def handle_join_room(data):
         """Handle client joining a specific room (usually user-specific)"""
-        user_id = Session['user_id']
+        user_id = session['user_id']
         if user_id:
             join_room(user_id)
             logger.info(f"User {user_id} joined room")
-            if redis_client:
-                cache_key = f'{user_id}_room'
-                redis_client.set(cache_key, json.dumps({'user_id': user_id}))
             emit('response', {'response': f'user {user_id} joined room'}, room=user_id)
 
 
@@ -87,8 +70,8 @@ def register_socket_events(socketio_instance):
         """Handle incoming questions from clients."""
         query = data.get('question')
         graph_id = data.get('graph_id')
-        user_id = Session['user_id']
-        token = Session['token']
+        user_id = session['user_id']
+        token = session['token']
         
         if user_id and query:
             logger.info(f"Received question from {user_id}: {query}")
