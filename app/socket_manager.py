@@ -1,5 +1,6 @@
 
 from flask_socketio import SocketIO, emit, send, disconnect, join_room
+from flask import Session
 import redis
 import json
 import os
@@ -58,8 +59,10 @@ def register_socket_events(socketio_instance):
     
     @socketio_instance.on('connect')
     @socket_token_required
-    def handle_connect(current_user_id,args):
+    def handle_connect(current_user_id,token,args):
         logger.info(f"Client connected")
+        Session['user_id']= current_user_id
+        Session['token'] = token 
         emit('response', {'message': 'Connected successfully'})
     
     @socketio_instance.on('disconnect')
@@ -69,8 +72,7 @@ def register_socket_events(socketio_instance):
     @socketio_instance.on('join_room')
     def handle_join_room(data):
         """Handle client joining a specific room (usually user-specific)"""
-        user_id = data.get('user_id')
-        token = data.get('token')
+        user_id = Session['user_id']
         if user_id:
             join_room(user_id)
             logger.info(f"User {user_id} joined room")
@@ -84,9 +86,9 @@ def register_socket_events(socketio_instance):
     def handle_question(data):
         """Handle incoming questions from clients."""
         query = data.get('question')
-        user_id = data.get('user_id')
         graph_id = data.get('graph_id')
-        token = data.get('token', '')
+        user_id = Session['user_id']
+        token = Session['token']
         
         if user_id and query:
             logger.info(f"Received question from {user_id}: {query}")
