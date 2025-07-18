@@ -379,7 +379,7 @@ class AiAssistance:
                 emit_to_user(user=user_id,message="Analyzing...")
 
             elif resource == "hypothesis":
-                summary = self.hypothesis_generation.get_by_hypothesis_id(token,graph_id,query)
+                summary = self.hypothesis_generation.get_by_hypothesis_id(token,graph_id,user_id,query)
                 emit_to_user(user=user_id,message="Analyzing...")
                 logger.info(f"Summaries of the graph id {graph_id} is {summary}")
             

@@ -2,6 +2,7 @@
 from typing import Dict, Any, Tuple, Optional, List, Union
 from app.prompts.hypothesis_prompt import hypothesis_format_prompt,hypothesis_response
 from app.storage.sql_redis_storage import RedisGraphManager
+from app.socket_manager import emit_to_user
 import logging
 import os
 import difflib
@@ -80,7 +81,7 @@ class HypothesisGeneration:
             logger.error(f"API request failed: {e}")
             return {"error": f"Request failed Please Try Again"}
 
-    def get_enrich_id_genes_GO_terms(self, token: str, hypothesis_id: str, retrieved_keys: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    def get_enrich_id_genes_GO_terms(self, token: str, hypothesis_id: str, retrieved_keys: Dict[str, Any],user_id) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
         """
         Process the hypothesis_id to extract enrichment details using the retrieved_keys.
         Then query the appropriate endpoint to get graph/summary.
@@ -95,7 +96,6 @@ class HypothesisGeneration:
         """
         logger.info(f"Processing hypothesis ID {hypothesis_id} with retrieved keys: {retrieved_keys}")
         
-        # Step 1: Get hypothesis data
         hypothesis_data = self._make_api_request(
             "GET", 
             HYPOTHESIS_DATA_API, 
@@ -106,6 +106,7 @@ class HypothesisGeneration:
         
         if "error" in hypothesis_data:
             logger.error(f"Failed to retrieve hypothesis data: {hypothesis_data['error']}")
+            emit_to_user(user=user_id,message="Failed to retrieve hypothesis data")
             return hypothesis_data, {}, ""
         
         # Extract relevant information
@@ -119,20 +120,19 @@ class HypothesisGeneration:
         # Initialize extracted result dictionary
         extracted = {"enrich id": enrich_id}
 
-        # Handle causal gene if requested
         if "Gene" in retrieved_keys or "causal_gene" in retrieved_keys:
             if causal_gene:
                 extracted["Gene"] = causal_gene
                 logger.debug(f"Extracted causal gene: {causal_gene}")
+                emit_to_user(user=user_id,message=f"Extracted causal gene: {causal_gene}")
             else:
                 logger.debug("No causal gene found in hypothesis data")
+                emit_to_user(user=user_id,message="No causal gene found in hypothesis data")
         
-        # Handle GO term selection
         go_term_name = retrieved_keys.get("GO")
         selected_go_term = None
         
         if go_term_name and go_terms:
-            # Find closest matching GO term using string similarity
             go_names = [go["name"] for go in go_terms]
             closest_matches = difflib.get_close_matches(go_term_name, go_names, n=1, cutoff=0.6)
             
@@ -140,14 +140,16 @@ class HypothesisGeneration:
                 match = closest_matches[0]
                 selected_go_term = next((go for go in go_terms if go["name"] == match), None)
                 logger.info(f"Matched GO term '{go_term_name}' to '{match}'")
+                emit_to_user(user=user_id,message=f"Matched GO term '{go_term_name}' to '{match}'")
         
-        # Default to first GO term if no match found
         if not selected_go_term and go_terms:
             selected_go_term = go_terms[0]
             logger.info(f"No matching GO term found, defaulting to: {selected_go_term['name']}")
+            emit_to_user(user=user_id,message=f"Using default GO term: {selected_go_term['name']}")
         
         if not selected_go_term:
             logger.warning("No valid GO term found for hypothesis")
+            emit_to_user(user=user_id,message="No valid GO term found for hypothesis")
             return {"error": "No valid GO term found."}, {}, ""
         
         # Store selected GO term information
@@ -156,7 +158,6 @@ class HypothesisGeneration:
         extracted["GO_id"] = go_id
         go_term_used = selected_go_term["name"]  # Store the GO term name for return
 
-        # Get summary for the selected GO term
         logger.info(f"Fetching summary for enrich id {enrich_id} with GO ID {go_id}")
         summary_response = self._make_api_request(
             "POST", 
@@ -170,9 +171,10 @@ class HypothesisGeneration:
             return summary_response["summary"], summary_response["graph"], go_term_used
         else:
             logger.error("Failed to fetch graph and summary")
+            emit_to_user(user=user_id,message="Failed to fetch detailed analysis")
             return {"error": "Failed to fetch graph and summary"}, {}, ""
 
-    def get_by_hypothesis_id(self, token: str, hypothesis_id: str, query=None) -> Dict[str, Any]:
+    def get_by_hypothesis_id(self, token: str, hypothesis_id: str,user_id,query=None,) -> Dict[str, Any]:
         """
         Retrieve hypothesis information by ID.
         
@@ -185,9 +187,11 @@ class HypothesisGeneration:
             Dictionary containing hypothesis text or error message
         """
         logger.info(f"Retrieving hypothesis by ID: {hypothesis_id}")
+        emit_to_user(user=user_id,message=f"Retrieving hypothesis by ID: {hypothesis_id}")
         
         try:   
             if query: 
+                emit_to_user(user=user_id,message=f"Processing query with existing hypothesis...")
                 data = {
                     "query": query,
                     "hypothesis_id": hypothesis_id}
@@ -198,11 +202,12 @@ class HypothesisGeneration:
                 response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, data=data, headers=headers)
                 response.raise_for_status()
                 data = response.json()
+                emit_to_user(user=user_id,message="Successfully processed query with hypothesis")
                 return data
             else:
                 cached_graph = self.redis_graph_manager.get_graph_by_id(hypothesis_id)
                 if cached_graph and cached_graph.get("summary"):
-                    logger.info(f"Cache hit for graph_id={graph_id} {cached_graph}")
+                    logger.info(f"Cache hit for graph_id={hypothesis_id} {cached_graph}")
                     return {"text": cached_graph["summary"]}
 
                 data = {
@@ -221,11 +226,13 @@ class HypothesisGeneration:
                     return data
                 except Exception as e:
                     logger.error(f"Failed to retrieve hypothesis by ID: {response}")
+                    emit_to_user(user=user_id,message=f"Failed to retrieve hypothesis")
                     return "NO summaries provided"
-        except:
+        except Exception as e:
+            emit_to_user(user=user_id,message="Error retrieving hypothesis")
             return None
 
-    def format_user_query(self, query: str) -> Dict[str, Any]:
+    def format_user_query(self, query: str,user_id) -> Dict[str, Any]:
         """
         Format user query using the LLM to extract relevant parameters.
         
@@ -243,15 +250,17 @@ class HypothesisGeneration:
             
             if not response:
                 logger.warning("LLM returned empty response for query formatting")
+                emit_to_user(user=user_id,message="Warning: Empty response from query formatting")
             else:
                 logger.info(f"Successfully formatted query with {len(response)} parameters")
                 
             return response
         except Exception as e:
             logger.error(f"Error formatting user query: {str(e)}")
+            emit_to_user(user=user_id,message=f"Error formatting query")
             return {}
 
-    def get_hypothesis(self, token: str, user_query: str) -> Union[Tuple[str, Dict[str, Any]], Dict[str, str]]:
+    def get_hypothesis(self, token: str, user_query: str,user_id) -> Union[Tuple[str, Dict[str, Any]], Dict[str, str]]:
         """
         Generate a hypothesis based on the user query.
         
@@ -264,11 +273,11 @@ class HypothesisGeneration:
         """
         logger.info(f"Generating hypothesis for query: {user_query}")
         
-        # Format the user query
-        refactored_query = self.format_user_query(user_query)
+        refactored_query = self.format_user_query(user_query,user_id)
         
         if not refactored_query:
             logger.warning("Failed to format user query")
+            emit_to_user(user=user_id,message="Failed to format user query")
             return {"text": "Sorry I can't help with your question. Please try again elaborating it."}
             
         try:
@@ -295,12 +304,14 @@ class HypothesisGeneration:
             logger.info(f"Response from {HYPOTHESIS_MAIN_ENDPOINT} endpoint are {response}")
             if "error" in response:
                 logger.error(f"Failed to generate hypothesis: {response['error']}")
+                emit_to_user(user=user_id,message=f"Failed to generate hypothesis")
                 return {"text": f"Sorry couldn't generate hypothesis for the given question {user_query}"}
                 
             hypothesis_id = response.get("hypothesis_id")
             
             if not hypothesis_id:
                 logger.error("No hypothesis ID returned from API")
+                emit_to_user(user=user_id,message="No hypothesis ID returned from API")
                 return {"text": "Failed to generate hypothesis - no ID returned"}
                 
             logger.info(f"Successfully generated hypothesis with ID: {hypothesis_id}")
@@ -308,11 +319,12 @@ class HypothesisGeneration:
             
         except Exception as e:
             logger.error(f"Error generating hypothesis: {str(e)}")
+            emit_to_user(user=user_id,message=f"Error generating hypothesis")
             import traceback
             logger.error(traceback.format_exc())
             return {"text": f"Sorry couldn't generate hypothesis for the given question {user_query}"}
 
-    def generate_hypothesis(self, token: str, user_query: str) -> Dict[str, Any]:
+    def generate_hypothesis(self, token: str, user_query: str,user_id:str) -> Dict[str, Any]:
         """
         Main method to generate a hypothesis response based on user query.
         
@@ -324,22 +336,23 @@ class HypothesisGeneration:
             Formatted hypothesis response with resource information
         """
         logger.info(f"Processing complete hypothesis generation for: {user_query}")
+        emit_to_user(user=user_id,message="Starting hypothesis generation process...")
         
-        # Get hypothesis ID and retrieved keys
-        result = self.get_hypothesis(token, user_query)
+        result = self.get_hypothesis(token, user_query,user_id)
         
         # Check if we got an error instead of a tuple
         if isinstance(result, dict) and "text" in result:
             logger.warning(f"Failed to get hypothesis: {result['text']}")
+            emit_to_user(user=user_id, message="Failed to get hypothesis")
             return result
 
         hypothesis_id, retrieved_keys = result
-        
-        # Get enriched data
-        enriched_data, graph, go_term_used = self.get_enrich_id_genes_GO_terms(token, hypothesis_id, retrieved_keys)
+
+        enriched_data, graph, go_term_used = self.get_enrich_id_genes_GO_terms(token, hypothesis_id, retrieved_keys,user_id)
         
         if "error" in enriched_data:
             logger.error(f"Failed to enrich hypothesis data: {enriched_data['error']}")
+            emit_to_user(user=user_id, message="Failed to enrich hypothesis data")
             return {"text": f"Please Try again. No hypothesis is found"}
         
         # Generate final response
@@ -353,8 +366,8 @@ class HypothesisGeneration:
             graph=graph,
             go_term_used=go_term_used
         )
+
         response_text = self.llm.generate(prompt)
-        # Store summary in Redis cache for 24 hours
         self.redis_graph_manager.create_graph(graph_id=hypothesis_id, graph_summary=response_text)
 
         # Return in the new format with resource information
