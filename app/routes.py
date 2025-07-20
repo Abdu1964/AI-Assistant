@@ -5,7 +5,7 @@ import traceback
 import json
 import os
 from app.rag.utils.tts_utils import tts_manager
-from app.storage.sql_redis_storage import set_audio_cache, get_audio_cache
+from app.storage.sql_storage import set_audio_cache, get_audio_cache
 
 load_dotenv()
 main_bp = Blueprint("main", __name__)
@@ -381,5 +381,3 @@ def clear_user_history(current_user_id, auth_token):
     except Exception as e:
         current_app.logger.error(f"Error clearing history: {e}")
         return jsonify(error=f"Error clearing history: {str(e)}"), 500
-
-
