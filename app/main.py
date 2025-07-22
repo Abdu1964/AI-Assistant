@@ -310,63 +310,55 @@ class AiAssistance:
             logger.error("Error in agent processing", exc_info=True)
             return f"Error processing query: {str(e)}"
 
-    async def assistant(self, query, user_id: str, token: str, user_context=None, context=None,graph_id=None):
-        logger.info(f"Assistant called with query: {query}, user_id: {user_id}, context: {context}, graph_id: {graph_id}")
+    async def assistant(self, query, user_id: str, token: str, resource=None,graph_id=None):
+        logger.info(f"Assistant called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}")
 
         try:
             user_information = self.store.get_context_and_memory(user_id)
             memory = user_information['memories']
             history = user_information['questions']
-            context = None
+            resource = resource if resource else ""
             logger.info(f"Memory and history: {memory} {history}")
         except:
             history = ""
             memory = ""
-            context = ""
-        
-        if graph_id:  
+
+        graph_context = None
+        if graph_id:
             logger.info(f"Graph id has been passed to the given query {query} answering based on the graph")
-            graph_response = self.answer_from_graph_summaries(query,user_id,graph_id,context,token)
-            if graph_response:
-                return graph_response
-        
-        # Use your conversation_prompt here
+            graph_context = self.answer_from_graph_summaries(query,user_id,resource,token,graph_id)
+            return graph_context
         prompt = conversation_prompt.format(
-            memory=memory,
-            query=query,
-            history=history,
-            user_context=user_context
-        )
+            memory = memory,
+            query = query,
+            history = history,
+            user_context = graph_context) 
+        
         response = self.advanced_llm.generate(prompt)
         emit_to_user(user=user_id,message="Analyzing...")
         if response:
             if "response:" in response:
                 result = response.split("response:")[1].strip()
                 final_response = result.strip('"')
-                await self.store.save_user_information(self.advanced_llm, query, user_id, context)
+                await self.store.save_user_information(self.advanced_llm, query, user_id, resource)
                 self.history.create_history(user_id, query, final_response)
                 emit_to_user(user=user_id,message=final_response,status="completed")
-                return {"text": final_response}
+                return {"text": final_response}, history
                 
             elif "question:" in response:
                 refactored_question = response.split("question:")[1].strip()
-                await self.store.save_user_information(self.advanced_llm, query, user_id, context)
+                await self.store.save_user_information(self.advanced_llm, query, user_id, resource)
                 agent_response = self.agent(refactored_question, user_id, token)
                 emit_to_user(user=user_id,message=agent_response,status="completed")
                 self.history.create_history(user_id, query, agent_response)
-                return agent_response
-            else:
-                logger.warning(f"Unexpected response format: {response}")
-                await self.store.save_user_information(self.advanced_llm, query, user_id, context)
-                emit_to_user(user=user_id,message={"text": response or "I'm sorry, I couldn't process your request properly."},status="completed")
-                return {"text": response or "I'm sorry, I couldn't process your request properly."}
+                return agent_response, history
         else:
             logger.error("No response generated from LLM")
-            await self.store.save_user_information(self.advanced_llm, query, user_id, context)
+            await self.store.save_user_information(self.advanced_llm, query, user_id, resource)
             emit_to_user(user=user_id,message={"text": "I'm sorry, I couldn't generate a response at this time."},status="completed")
             error_msg = "I apologize, but I encountered an error while processing your request."
             emit_to_user(user=user_id,message={"text": error_msg}, status="completed")
-            return {"text": error_msg}
+            return {"text": error_msg}, history
     
     def answer_from_graph_summaries(self,query,user_id,resource,token,graph_id):
         logger.info(f"Answer from graph summaries called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}")
@@ -422,7 +414,7 @@ class AiAssistance:
                     'text': "Only PDF files are supported."
                     }
                 return response, 400
-
+            
     def assistant_response(self,query,user_id,token,graph=None,graph_id=None,file=None,resource="annotation",json_query=None):  
         logger.info(f"Assistant response called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}")
         try:
