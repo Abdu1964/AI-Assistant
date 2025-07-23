@@ -10,7 +10,7 @@ from app.annotation_graph.schema_handler import SchemaHandler
 from app.llm_handle.llm_models import LLMInterface
 from app.prompts.annotation_prompts import EXTRACT_RELEVANT_INFORMATION_PROMPT, JSON_CONVERSION_PROMPT, SELECT_PROPERTY_VALUE_PROMPT
 from .dfs_handler import *
-from app.storage.sql_redis_storage import RedisGraphManager
+from app.storage.redis import redis_manager
 from app.socket_manager import emit_to_user
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,7 +27,6 @@ class Graph:
                                     username=os.getenv('NEO4J_USERNAME'), 
                                     password=os.getenv('NEO4J_PASSWORD'))
         self.kg_service_url = os.getenv('ANNOTATION_SERVICE_URL')
-        self.redis_graph_manager = RedisGraphManager()
 
     def query_knowledge_graph(self, json_query, token):
         """
@@ -121,7 +120,7 @@ class Graph:
                              "type": "annotation"},
             }
             # Store summary in Redis cache for 24 hours
-            # self.redis_graph_manager.create_graph(graph_id=graph_id, graph_summary=summary_text)
+            # redis_manager.create_graph(graph_id=graph_id, graph_summary=summary_text)
 
             logger.info("Completed query processing.")
             return response

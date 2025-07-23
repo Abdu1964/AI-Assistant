@@ -9,7 +9,7 @@ import os
 import requests
 from dotenv import load_dotenv
 from app.prompts.summarizer_prompts import SUMMARY_PROMPT, SUMMARY_PROMPT_BASED_ON_USER_QUERY,SUMMARY_PROMPT_CHUNKING,SUMMARY_PROMPT_CHUNKING_USER_QUERY
-from app.storage.sql_redis_storage import RedisGraphManager
+from app.storage.redis import redis_manager
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,6 @@ class Graph_Summarizer:
             self.max_token=100000     
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
         self.kg_service_url = os.getenv('ANNOTATION_SERVICE_URL')
-        self.redis_graph_manager = RedisGraphManager()
 
     def clean_and_format_response(self,desc):
         desc = desc.strip()
@@ -196,7 +195,7 @@ class Graph_Summarizer:
 
             else:
                 # First check Redis cache for summary
-                cached_graph = self.redis_graph_manager.get_graph_by_id(graph_id)
+                cached_graph = redis_manager.get_graph_by_id(graph_id)
                 if cached_graph and cached_graph.get("graph_summary"):
                     logger.info(f"Cache hit for graph_id={graph_id} {cached_graph}")
                     return {"text": cached_graph["graph_summary"]}
@@ -212,7 +211,7 @@ class Graph_Summarizer:
                 summary_text = json_response.get("answer") or json_response.get("title") or ""
 
                 # Store summary in Redis cache for 24 hours
-                self.redis_graph_manager.create_graph(graph_id=graph_id, graph_summary=summary_text)
+                redis_manager.create_graph(graph_id=graph_id, graph_summary=summary_text)
 
                 logger.info(f"response is {summary_text}")
                 logger.info(f"Querying annotation by id is done")

@@ -1,7 +1,7 @@
 
 from typing import Dict, Any, Tuple, Optional, List, Union
 from app.prompts.hypothesis_prompt import hypothesis_format_prompt,hypothesis_response
-from app.storage.sql_redis_storage import RedisGraphManager
+from app.storage.redis import redis_manager
 from app.socket_manager import emit_to_user
 import logging
 import os
@@ -36,7 +36,6 @@ class HypothesisGeneration:
             llm: Language model instance for generating formatted queries and responses
         """
         self.llm = llm
-        self.redis_graph_manager = RedisGraphManager()
         logger.info("HypothesisGeneration initialized with LLM")
 
     def _make_api_request(self, 
@@ -168,6 +167,8 @@ class HypothesisGeneration:
             )
         if "error" not in summary_response:
             logger.info(f"Successfully retrieved graph and summary {summary_response}")
+            redis_manager.create_graph(graph_id=hypothesis_id,graph_summary=summary_response["summary"])
+            logger.info(f"Caching for graph_id {hypothesis_id}")
             return summary_response["summary"], summary_response["graph"], go_term_used
         else:
             logger.error("Failed to fetch graph and summary")
@@ -205,10 +206,10 @@ class HypothesisGeneration:
                 emit_to_user(user=user_id,message="Successfully processed query with hypothesis")
                 return data
             else:
-                cached_graph = self.redis_graph_manager.get_graph_by_id(hypothesis_id)
-                if cached_graph and cached_graph.get("summary"):
+                cached_graph = redis_manager.get_graph_by_id(hypothesis_id)
+                if cached_graph and cached_graph.get("graph_summary"):
                     logger.info(f"Cache hit for graph_id={hypothesis_id} {cached_graph}")
-                    return {"text": cached_graph["summary"]}
+                    return {"text": cached_graph["graph_summary"]}
 
                 data = {
                     "hypothesis_id": hypothesis_id
@@ -222,7 +223,8 @@ class HypothesisGeneration:
                     response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, data=data, headers=headers)
                     response.raise_for_status()
                     data = response.json()
-                    self.redis_graph_manager.create_graph(graph_id=data['hypothesis_id'], graph_summary=data['summary'])
+                    redis_manager.create_graph(graph_id=data['hypothesis_id'], graph_summary=data['summary'])
+                    logger.info(f"Cached generated graph for graph id {data['resource']['id']}")
                     return data
                 except Exception as e:
                     logger.error(f"Failed to retrieve hypothesis by ID: {response}")
@@ -339,7 +341,7 @@ class HypothesisGeneration:
         emit_to_user(user=user_id,message="Starting hypothesis generation process...")
         
         result = self.get_hypothesis(token, user_query,user_id)
-        
+
         # Check if we got an error instead of a tuple
         if isinstance(result, dict) and "text" in result:
             logger.warning(f"Failed to get hypothesis: {result['text']}")
@@ -347,6 +349,11 @@ class HypothesisGeneration:
             return result
 
         hypothesis_id, retrieved_keys = result
+        cached_graph = redis_manager.get_graph_by_id(hypothesis_id)
+        logger.info(f"Cached data is :{cached_graph}")
+        if cached_graph and cached_graph.get("graph_summary"):
+            logger.info(f"Cache hit for graph_id={hypothesis_id} {cached_graph}")
+            return {"text": cached_graph["graph_summary"],"resource":{"id":hypothesis_id, "type":"hypothesis"}}
 
         enriched_data, graph, go_term_used = self.get_enrich_id_genes_GO_terms(token, hypothesis_id, retrieved_keys,user_id)
         
@@ -368,7 +375,7 @@ class HypothesisGeneration:
         )
 
         response_text = self.llm.generate(prompt)
-        self.redis_graph_manager.create_graph(graph_id=hypothesis_id, graph_summary=response_text)
+        redis_manager.create_graph(graph_id=hypothesis_id, graph_summary=response_text)
 
         # Return in the new format with resource information
         return {
