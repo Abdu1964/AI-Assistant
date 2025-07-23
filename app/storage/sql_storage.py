@@ -123,50 +123,61 @@ class DatabaseManager:
             db.close()
     
     def get_context_and_memory(self, user_id: str):
-        """Extract user questions and memory for a user"""
+        """Extract user questions with context, plus memory for a user, combined in single list"""
         user_information = self.get_user_information(user_id)
         
-        questions = []
-        memories = []
+        result = []
         
         for record in user_information:
-            # Get user question
-            questions.append(record.user_question)
-            
-            # Extract and parse memory JSON
+            # Parse question
+            question = record.user_question
+
+            # Parse context
+            context = None
+            if record.context:
+                try:
+                    context_data = json.loads(record.context)
+                    if 'content' in context_data:
+                        content = context_data['content']
+                        if isinstance(content, str):
+                            context = json.loads(content)
+                        else:
+                            context = content
+                    else:
+                        context = context_data
+                except json.JSONDecodeError:
+                    context = None
+
+            # Parse memory
+            memory = None
             if record.memory:
                 try:
                     memory_data = json.loads(record.memory)
-                    # Handle the nested JSON structure
                     if 'content' in memory_data:
                         content = memory_data['content']
                         if isinstance(content, str):
-                            # Parse the inner JSON string
-                            memory_content = json.loads(content)
+                            memory = json.loads(content)
                         else:
-                            memory_content = content
-                        memories.append(memory_content)
+                            memory = content
                     else:
-                        memories.append(memory_data)
+                        memory = memory_data
                 except json.JSONDecodeError:
-                    memories.append(None)
-            else:
-                memories.append(None)
-        
-        # Filter out empty lists and None values from memories
-        filtered_memories = []
-        for mem in memories:
-            if mem is not None and mem != []:
-                filtered_memories.append(mem)
-        
-        # If all memories are empty/None, return empty string
-        if not filtered_memories:
-            filtered_memories = [""]
-        
-        return {
-            'questions': questions,
-            'memories': filtered_memories
-        }
+                    memory = None
+
+            # If memory is empty or None, use empty string
+            if memory in [None, []]:
+                memory = ""
+
+            # Add to result list
+            result.append({
+                "QUESTION": {
+                    "question": question,
+                    "context": context
+                },
+                "MEMORIES": memory
+            })
+
+        return result
     
     def update_user_information(self, question_id: str, memory: dict = None, context: dict = None):
         '''
@@ -209,37 +220,4 @@ class DatabaseManager:
             print(f"Error saving user information: {e}")
             return None
        
-# Initialize database manager
 db_manager = DatabaseManager()
-
-REDIS_URL=os.getenv('REDIS_URL')
-class RedisGraphManager:
-    """Redis storage for graphs with automatic 24-hour expiration."""
-    def __init__(self, url=REDIS_URL):
-        self.redis = redis.Redis.from_url(url, decode_responses=True)
-
-    def create_graph(self, graph_id=None, graph_summary=None, context=None):
-        """Create a new graph that expires in 24 hours."""
-        graph_id = graph_id or str(uuid.uuid4())  
-        key = f"graph:{graph_id}"
-
-        data = {
-            "graph_id": graph_id,
-            "graph_summary": graph_summary or "",
-            "context": context or ""
-        }
-        self.redis.hset(key, mapping=data)
-        self.redis.expire(key, 86400)  # 24 hours in seconds
-        return {"graph_id": graph_id}
-
-    def get_graph_by_id(self, graph_id):
-        """Retrieve a graph by its ID if it has not yet expired."""
-        key = f"graph:{graph_id}"
-
-        if not self.redis.exists(key):
-            return None
-
-        data = self.redis.hgetall(key)
-        if not data:
-            return None
-        return {"graph_id": graph_id, **data}

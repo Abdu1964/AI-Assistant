@@ -37,7 +37,7 @@ def load_config():
         logger.error(f'Error loading config file: {e}')
         raise
 
-from app.storage.sql_redis_storage import create_tables, db_manager
+from app.storage.sql_storage import create_tables
 import os
 
 def initialize_database():

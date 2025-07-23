@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import logging
 import asyncio
 from app.lib.auth import socket_token_required
+from app.storage.redis import redis_manager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -29,9 +30,8 @@ def init_socketio(app):
     logger.info(f"Initializing SocketIO with Redis: {redis_enabled}")
     
     try:
-        if redis_enabled:
-            # Setup Redis client
-            redis_client = redis.from_url(redis_url)
+        if redis_manager.is_available:
+            redis_url = redis_manager.get_socketio_redis_url()
             socketio = SocketIO(
                 app, 
                 message_queue=redis_url, 
