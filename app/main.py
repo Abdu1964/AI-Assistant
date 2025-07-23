@@ -7,7 +7,7 @@ from .prompts.classifier_prompt import classifier_prompt,answer_from_graph
 from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
 from .storage.history import History
-from .storage.sql_redis_storage import DatabaseManager
+from .storage.sql_storage import DatabaseManager
 from .socket_manager import emit_to_user
 from .Galaxy_integration.galaxy import GalaxyHandler
 import asyncio
@@ -315,19 +315,25 @@ class AiAssistance:
 
         try:
             user_information = self.store.get_context_and_memory(user_id)
-            memory = user_information['memories']
-            history = user_information['questions']
-            resource = resource if resource else ""
-            logger.info(f"Memory and history: {memory} {history}")
+            history = []
+            memory = []
+            for item in user_information:
+                q = item['QUESTION']['question']
+                c = item['QUESTION']['context']
+                m = item['MEMORIES']
+                history.append({'question': q, 'context': c})
+                memory.append(m)
         except:
             history = ""
             memory = ""
-
+            
+        logger.info(f"Histories of the user are : {history} and memories are {memory}")
         graph_context = None
         if graph_id:
             logger.info(f"Graph id has been passed to the given query {query} answering based on the graph")
             graph_context = self.answer_from_graph_summaries(query,user_id,resource,token,graph_id)
             return graph_context
+       
         prompt = conversation_prompt.format(
             memory = memory,
             query = query,
@@ -340,18 +346,28 @@ class AiAssistance:
             if "response:" in response:
                 result = response.split("response:")[1].strip()
                 final_response = result.strip('"')
-                await self.store.save_user_information(self.advanced_llm, query, user_id, resource)
+                await self.store.save_user_information(advanced_llm=self.advanced_llm, query=query, user_id=user_id, context=None)
                 self.history.create_history(user_id, query, final_response)
                 emit_to_user(user=user_id,message=final_response,status="completed")
-                return {"text": final_response}, history
+                return {"text": final_response}
                 
             elif "question:" in response:
                 refactored_question = response.split("question:")[1].strip()
-                await self.store.save_user_information(self.advanced_llm, query, user_id, resource)
                 agent_response = self.agent(refactored_question, user_id, token)
+
+                if isinstance(agent_response, str):
+                    agent_response = json.loads(agent_response)
+                
+                resource_type = agent_response.get('resource', {}).get('type') if agent_response else None
+                
+                if resource_type:
+                    response_resource = f"successfully made {resource_type}"
+                    logger.info(f"Here is the resource {response_resource}")
+
+                await self.store.save_user_information(advanced_llm=self.advanced_llm, query=query, user_id=user_id, context=response_resource)
                 emit_to_user(user=user_id,message=agent_response,status="completed")
                 self.history.create_history(user_id, query, agent_response)
-                return agent_response, history
+                return agent_response
         else:
             logger.error("No response generated from LLM")
             await self.store.save_user_information(self.advanced_llm, query, user_id, resource)
@@ -424,7 +440,7 @@ class AiAssistance:
                 return response
 
             logger.info(f"agent being called for a given query {query} from resource {resource}")
-            response = asyncio.run(self.assistant(query=query, user_id=user_id, token=token,context=resource,graph_id=graph_id))
+            response = asyncio.run(self.assistant(query=query, user_id=user_id, token=token,resource=resource,graph_id=graph_id))
             return response 
 
             # if query and graph:

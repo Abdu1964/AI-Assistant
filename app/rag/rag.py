@@ -236,7 +236,8 @@ class RAG:
             result = self.llm.generate(prompt)
             logger.info("Result generated successfully.")
             response = {
-                "text": result
+                "text": result,
+                "resource":{"type":"RAG", "id":None}
             }
             return response
         except Exception as e:
