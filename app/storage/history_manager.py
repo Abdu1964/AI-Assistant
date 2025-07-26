@@ -1,5 +1,5 @@
 from datetime import datetime
-from app.storage.sql_redis_storage import db_manager, UserInformation
+from app.storage.sql_storage import db_manager, UserInformation
 import uuid
 
 
