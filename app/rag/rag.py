@@ -9,7 +9,7 @@ from datetime import datetime
 import fitz
 from app.rag.utils.pdf_processor import extract_text_from_pdf, chunk_text
 from app.rag.utils.pdf_analyzer import PDFAnalyzer
-from app.storage.sql_redis_storage import db_manager
+from app.storage.sql_storage import db_manager
 
 
 logging.basicConfig(
@@ -266,10 +266,7 @@ class RAG:
             )
             result = self.llm.generate(prompt)
             logger.info("Result generated successfully.")
-            response = {
-                "text": result,
-                "resource":{"type":"RAG", "id":None}
-            }
+            response = {"text": result, "resource": {"type": "RAG", "id": None}}
             return response
         except Exception as e:
             logger.error(f"An error occurred while generating the result: {e}")
