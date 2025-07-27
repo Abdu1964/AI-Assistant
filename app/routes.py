@@ -5,7 +5,8 @@ import traceback
 import json
 import os
 from app.rag.utils.tts_utils import tts_manager
-from app.storage.sql_storage import set_audio_cache, get_audio_cache, db_manager
+from app.storage.sql_storage import db_manager
+from app.storage.redis import redis_manager
 from app.storage.history_manager import HistoryManager
 
 load_dotenv()
@@ -254,7 +255,7 @@ def get_summary_audio(current_user_id, auth_token):
 
         # Redis cache key
         cache_key = f"audio:summary:{user_id}:{pdf_id}"
-        audio_data = get_audio_cache(cache_key)
+        audio_data = redis_manager.get_audio_cache(cache_key)
         if audio_data:
             current_app.logger.info(
                 f"[AUDIO CACHE] Served summary audio for user_id={user_id}, pdf_id={pdf_id} from Redis cache."
@@ -285,7 +286,7 @@ def get_summary_audio(current_user_id, auth_token):
             return jsonify(error="Failed to generate audio"), 500
 
         # Store in Redis cache for 10 minutes
-        set_audio_cache(cache_key, audio_data, expire_seconds=600)
+        redis_manager.set_audio_cache(cache_key, audio_data, expire_seconds=600)
 
         # Return the audio data directly
         return Response(audio_data, mimetype="audio/mpeg")
@@ -310,7 +311,7 @@ def get_query_audio(current_user_id, auth_token):
 
         # Redis cache key
         cache_key = f"audio:query:{user_id}:{query_id}"
-        audio_data = get_audio_cache(cache_key)
+        audio_data = redis_manager.get_audio_cache(cache_key)
         if audio_data:
             current_app.logger.info(
                 f"[AUDIO CACHE] Served query audio for user_id={user_id}, query_id={query_id} from Redis cache."
@@ -336,7 +337,7 @@ def get_query_audio(current_user_id, auth_token):
             return jsonify(error="Failed to generate audio"), 500
 
         # Store in Redis cache for 10 minutes
-        set_audio_cache(cache_key, audio_data, expire_seconds=600)
+        redis_manager.set_audio_cache(cache_key, audio_data, expire_seconds=600)
 
         # Return the audio data directly
         return Response(audio_data, mimetype="audio/mpeg")
