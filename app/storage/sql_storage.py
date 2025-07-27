@@ -13,7 +13,6 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import uuid
-import redis
 from app.storage.memory_layer import MemoryManager
 
 # SQLite database configuration
@@ -326,51 +325,3 @@ class DatabaseManager:
 
 
 db_manager = DatabaseManager()
-
-# REDIS_URL setup
-REDIS_URL = os.getenv("REDIS_URL")
-redis_client = redis.Redis.from_url(REDIS_URL)
-
-
-# Audio cache helpers
-def set_audio_cache(key, audio_bytes, expire_seconds=600):
-    # Store audio bytes in Redis with a TTL (default 10 minutes).
-    redis_client.set(key, audio_bytes, ex=expire_seconds)
-
-
-def get_audio_cache(key):
-    # Retrieve audio bytes from Redis. Returns None if not found.
-    return redis_client.get(key)
-
-
-class RedisGraphManager:
-    """Redis storage for graphs with automatic 24-hour expiration."""
-
-    def __init__(self, url=REDIS_URL):
-        self.redis = redis.Redis.from_url(url, decode_responses=True)
-
-    def create_graph(self, graph_id=None, graph_summary=None, context=None):
-        """Create a new graph that expires in 24 hours."""
-        graph_id = graph_id or str(uuid.uuid4())
-        key = f"graph:{graph_id}"
-
-        data = {
-            "graph_id": graph_id,
-            "graph_summary": graph_summary or "",
-            "context": context or "",
-        }
-        self.redis.hset(key, mapping=data)
-        self.redis.expire(key, 86400)  # 24 hours in seconds
-        return {"graph_id": graph_id}
-
-    def get_graph_by_id(self, graph_id):
-        """Retrieve a graph by its ID if it has not yet expired."""
-        key = f"graph:{graph_id}"
-
-        if not self.redis.exists(key):
-            return None
-
-        data = self.redis.hgetall(key)
-        if not data:
-            return None
-        return {"graph_id": graph_id, **data}
