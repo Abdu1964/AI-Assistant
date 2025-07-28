@@ -188,17 +188,42 @@ class AiAssistance:
 
         return workflow
 
+    def get_pdf_summaries(self, user_id, pdf_ids=None):
+        pdf_summaries = []
+        user_pdfs = self.store.get_user_pdfs(user_id)
+        if pdf_ids:
+            filtered_pdfs = [pdf for pdf in user_pdfs if pdf.pdf_id in pdf_ids]
+        else:
+            filtered_pdfs = user_pdfs
+        for pdf in filtered_pdfs:
+            pdf_summaries.append(
+                {
+                    "pdf_id": pdf.pdf_id,
+                    "filename": pdf.filename,
+                    "summary": pdf.summary or "",
+                }
+            )
+        return pdf_summaries
+
     def _classify_query(self, state: AgentState) -> Dict[str, Any]:
         query = state["user_query"]
+        user_id = state["user_id"]
+        pdf_ids = state.get("pdf_ids")
+
+        # Fetch PDF summaries using helper
+        pdf_summaries = self.get_pdf_summaries(user_id, pdf_ids)
+
         logger.info(f"Classifying query: {query}")
 
         classifier_prompt = f"""Classify this query into one of these categories:
-        - annotation: Requests for factual information about genes, proteins, variants,
+        - annotation: Requests for factual information about genes, proteins, variants, or biological graphs/networks
         - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
         - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
-        - rag: General information requests
-        Query: {query}
-        Respond ONLY with the category name."""
+        - rag: General information requests, including queries about uploaded PDFs or document profiles (e.g., questions about PDF summaries, metadata, or content)
+        User query: {query}
+        PDF summaries: {pdf_summaries}
+        Respond ONLY with the category name."
+        """
 
         response = self.advanced_llm.generate(classifier_prompt).lower()
         query_type = response.split()[0]  # Take first word in case LLM adds explanation
@@ -407,9 +432,11 @@ class AiAssistance:
                 m = item["MEMORIES"]
                 history.append({"question": q, "context": c})
                 memory.append(m)
-        except:
+            pdf_summaries = self.get_pdf_summaries(user_id, pdf_ids)
+        except Exception as e:
             history = ""
             memory = ""
+            pdf_summaries = []
 
         logger.info(f"Histories of the user are : {history} and memories are {memory}")
         graph_context = None
@@ -428,6 +455,7 @@ class AiAssistance:
             history=history,
             conversation_history=history,
             user_context=graph_context,
+            pdf_summaries=pdf_summaries,
         )
 
         response = self.advanced_llm.generate(prompt)

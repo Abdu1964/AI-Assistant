@@ -5,6 +5,7 @@ CONTEXT ANALYSIS:
 - User's previous research topics and memories: {memory}
 - Previous conversation history: {history}
 - Recent conversation context: {conversation_history}
+- Summaries of user's uploaded PDFs: {pdf_summaries}
 - Current query: {query}
 - the user query answer from the given graph is: {user_context} 
 
