@@ -15,4 +15,4 @@ app, socketio = create_app()
 
 if __name__ == '__main__':
     logger.info(f"Starting application on port {port}")
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    socketio.run(app, host="0.0.0.0", port=port, debug=False, use_reloader=False)
