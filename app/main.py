@@ -1,12 +1,17 @@
-from .llm_handle.llm_models import LLMInterface,OpenAIModel,get_llm_model,openai_embedding_model
+from .llm_handle.llm_models import (
+    LLMInterface,
+    OpenAIModel,
+    get_llm_model,
+    openai_embedding_model,
+)
 from .annotation_graph.annotated_graph import Graph
 from .annotation_graph.schema_handler import SchemaHandler
 from .rag.rag import RAG
 from .prompts.conversation_handler import conversation_prompt
-from .prompts.classifier_prompt import classifier_prompt,answer_from_graph
+from .prompts.classifier_prompt import classifier_prompt, answer_from_graph
 from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
-from .storage.history import History
+from .storage.history_manager import HistoryManager
 from .storage.sql_storage import DatabaseManager
 from .socket_manager import emit_to_user
 from .Galaxy_integration.galaxy import GalaxyHandler
@@ -17,7 +22,7 @@ import traceback
 import json
 import os
 from flask_socketio import emit
-from typing import TypedDict, List, Annotated, Any,Dict
+from typing import TypedDict, List, Annotated, Any, Dict, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.tools import tool
@@ -30,14 +35,17 @@ log_file = os.path.join(log_dir, "Assistant.log")
 # os.makedirs(log_dir, exist_ok=True)
 logger.setLevel(logging.DEBUG)
 loghandle = loghandlers.TimedRotatingFileHandler(
-                filename="logfiles/Assistant.log",
-                when='D', interval=1, backupCount=7,
-                encoding="utf-8")
-loghandle.setFormatter(
-    logging.Formatter("%(asctime)s %(message)s"))
+    filename="logfiles/Assistant.log",
+    when="D",
+    interval=1,
+    backupCount=7,
+    encoding="utf-8",
+)
+loghandle.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logger.addHandler(loghandle)
 logger = logging.getLogger(__name__)
 load_dotenv()
+
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
@@ -47,32 +55,44 @@ class AgentState(TypedDict):
     query_type: str
     response: str
     error: str
+    pdf_ids: Optional[List[str]]
+
 
 class AiAssistance:
-    
-    def __init__(self, advanced_llm, basic_llm, schema_handler) -> None:
-        self.advanced_llm = advanced_llm     
+
+    def __init__(
+        self,
+        advanced_llm,
+        basic_llm,
+        schema_handler,
+        qdrant_client=None,
+        embedding_model=None,
+    ) -> None:
+        self.advanced_llm = advanced_llm
         self.basic_llm = basic_llm
         self.annotation_graph = Graph(advanced_llm, schema_handler)
         self.graph_summarizer = Graph_Summarizer(self.advanced_llm)
-        self.rag = RAG(llm=advanced_llm)
-        self.history = History()
+        self.rag = RAG(llm=advanced_llm, qdrant_client=qdrant_client)
+        self.history = HistoryManager()
         self.store = DatabaseManager()
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
         self.galaxy_handler = GalaxyHandler(advanced_llm)
-        
-        logger.info(f"AiAssistance initialized with advanced_llm: {type(self.advanced_llm).__name__}")
+        self.embedding_model = embedding_model
+
+        logger.info(
+            f"AiAssistance initialized with advanced_llm: {type(self.advanced_llm).__name__}"
+        )
         logger.info(f"Galaxy handler initialized: {type(self.galaxy_handler).__name__}")
-        
+
         # Initialize the LangGraph workflow
         self.workflow = self._create_workflow()
         self.app = self.workflow.compile()
 
     def _create_workflow(self) -> StateGraph:
         """Create the LangGraph workflow"""
-        
+
         logger.info("Creating LangGraph workflow with tools and nodes")
-        
+
         # Define tools
         @tool
         def get_json_format(query: str, token: str) -> str:
@@ -85,25 +105,29 @@ class AiAssistance:
             except Exception as e:
                 logger.error("Error in generating graph", exc_info=True)
                 return f"I couldn't generate a graph for the given question {query} please try again."
-        
+
         @tool
         def get_general_response(query: str, user_id: str) -> str:
             """Retrieve information for general knowledge queries."""
-            logger.info(f"get_general_response called with query: {query}, user_id: {user_id}")
+            logger.info(
+                f"get_general_response called with query: {query}, user_id: {user_id}"
+            )
             try:
                 response = self.rag.get_result_from_rag(query, user_id)
                 return response
             except Exception as e:
                 logger.error("Error in retrieving response", exc_info=True)
                 return "Error in retrieving response."
-        
+
         @tool
         def hypothesis_generation(query: str, token: str) -> str:
             """Generation of hypothesis for biological mechanisms"""
             logger.info(f"hypothesis_generation called with query: {query}")
             try:
                 logger.info(f"Here is the user query passed to the agent {query}")
-                response = self.hypothesis_generation.generate_hypothesis(token=token, user_query=query)
+                response = self.hypothesis_generation.generate_hypothesis(
+                    token=token, user_query=query
+                )
                 return response
             except Exception as e:
                 logger.error("Error in hypothesis generation", exc_info=True)
@@ -113,7 +137,9 @@ class AiAssistance:
         @tool
         def get_galaxy_tools(query: str, user_id: str) -> str:
             """Retrieve information about Galaxy web tools and workflows."""
-            logger.info(f"get_galaxy_tools called with query: {query}, user_id: {user_id}")
+            logger.info(
+                f"get_galaxy_tools called with query: {query}, user_id: {user_id}"
+            )
             try:
                 # You'll need to implement this method in your galaxy handler
                 response = self.galaxy_handler.get_galaxy_info(query, user_id)
@@ -121,11 +147,16 @@ class AiAssistance:
             except Exception as e:
                 logger.error("Error in galaxy tools retrieval", exc_info=True)
                 return "Error retrieving Galaxy tools information."
-                
-        self.tools = [get_json_format, get_general_response, hypothesis_generation, get_galaxy_tools]
+
+        self.tools = [
+            get_json_format,
+            get_general_response,
+            hypothesis_generation,
+            get_galaxy_tools,
+        ]
         # Create workflow
         workflow = StateGraph(AgentState)
-        
+
         # Add nodes
         workflow.add_node("classifier", self._classify_query)
         workflow.add_node("annotation_agent", self._annotation_agent)
@@ -133,10 +164,10 @@ class AiAssistance:
         workflow.add_node("rag_agent", self._rag_agent)
         workflow.add_node("galaxy_agent", self._galaxy_agent)
         workflow.add_node("finalizer", self._finalize_response)
-        
+
         # Define edges
         workflow.set_entry_point("classifier")
-        
+
         workflow.add_conditional_edges(
             "classifier",
             self._route_query,
@@ -145,139 +176,206 @@ class AiAssistance:
                 "hypothesis": "hypothesis_agent",
                 "rag": "rag_agent",
                 "galaxy": "galaxy_agent",
-                "error": "finalizer"
-            }
+                "error": "finalizer",
+            },
         )
-        
+
         workflow.add_edge("annotation_agent", "finalizer")
         workflow.add_edge("hypothesis_agent", "finalizer")
         workflow.add_edge("rag_agent", "finalizer")
         workflow.add_edge("galaxy_agent", "finalizer")
         workflow.add_edge("finalizer", END)
-        
+
         return workflow
-    
+
+    def get_pdf_summaries(self, user_id, pdf_ids=None):
+        pdf_summaries = []
+        user_pdfs = self.store.get_user_pdfs(user_id)
+        if pdf_ids:
+            filtered_pdfs = [pdf for pdf in user_pdfs if pdf.pdf_id in pdf_ids]
+        else:
+            filtered_pdfs = user_pdfs
+        for pdf in filtered_pdfs:
+            pdf_summaries.append(
+                {
+                    "pdf_id": pdf.pdf_id,
+                    "filename": pdf.filename,
+                    "summary": pdf.summary or "",
+                }
+            )
+        return pdf_summaries
+
     def _classify_query(self, state: AgentState) -> Dict[str, Any]:
         query = state["user_query"]
+        user_id = state["user_id"]
+        pdf_ids = state.get("pdf_ids")
+
+        # Fetch PDF summaries using helper
+        pdf_summaries = self.get_pdf_summaries(user_id, pdf_ids)
+
         logger.info(f"Classifying query: {query}")
-        
+
         classifier_prompt = f"""Classify this query into one of these categories:
-        - annotation: Requests for factual information about genes, proteins, variants,
+        - annotation: Requests for factual information about genes, proteins, variants, or biological graphs/networks
         - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
         - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
-        - rag: General information requests
-        Query: {query}
-        Respond ONLY with the category name."""
-        
+        - rag: General information requests, including queries about uploaded PDFs or document profiles (e.g., questions about PDF summaries, metadata, or content)
+        User query: {query}
+        PDF summaries: {pdf_summaries}
+        Respond ONLY with the category name."
+        """
+
         response = self.advanced_llm.generate(classifier_prompt).lower()
         query_type = response.split()[0]  # Take first word in case LLM adds explanation
-        
+
         logger.info(f"Query classified as: {query_type}")
-        
+
         return {
             "query_type": query_type,
-            "messages": [HumanMessage(content=f"Query classified as: {query_type}")]
+            "messages": [HumanMessage(content=f"Query classified as: {query_type}")],
         }
-        
+
     def _route_query(self, state: AgentState) -> str:
         """Route query based on classification"""
         route = state.get("query_type", "rag")
         logger.info(f"Routing query to: {route}")
         return route
-    
+
     def _annotation_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle annotation-related queries"""
-        logger.info(f"Annotation agent processing query: {state['user_query']} for user: {state['user_id']}")
+        logger.info(
+            f"Annotation agent processing query: {state['user_query']} for user: {state['user_id']}"
+        )
         try:
-            emit_to_user(user=state["user_id"],message="Creating Query Builder Format...")
+            emit_to_user(
+                user=state["user_id"], message="Creating Query Builder Format..."
+            )
             # Use the annotation graph tool
-            response = self.annotation_graph.validated_json(state["user_query"], user_id=state["user_id"])
-            
+            response = self.annotation_graph.validated_json(
+                state["user_query"], user_id=state["user_id"]
+            )
+
             return {
                 "response": response,
-                "messages": [AIMessage(content=f"Annotation query processed: {response}")]
+                "messages": [
+                    AIMessage(content=f"Annotation query processed: {response}")
+                ],
             }
         except Exception as e:
             logger.error("Error in annotation agent", exc_info=True)
             return {
                 "response": f"Error processing annotation query: {str(e)}",
                 "error": str(e),
-                "messages": [AIMessage(content=f"Error in annotation processing: {str(e)}")]
+                "messages": [
+                    AIMessage(content=f"Error in annotation processing: {str(e)}")
+                ],
             }
-    
+
     def _hypothesis_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle hypothesis generation queries"""
-        logger.info(f"Hypothesis agent processing query: {state['user_query']} for user: {state['user_id']}")
+        logger.info(
+            f"Hypothesis agent processing query: {state['user_query']} for user: {state['user_id']}"
+        )
         try:
-            emit_to_user(user=state["user_query"],message="Generating hypothesis...")
+            emit_to_user(user=state["user_query"], message="Generating hypothesis...")
             response = self.hypothesis_generation.generate_hypothesis(
-                token=state["token"], 
+                token=state["token"],
                 user_query=state["user_query"],
-                user_id=state["user_id"]
+                user_id=state["user_id"],
             )
-            
+
             return {
                 "response": response,
-                "messages": [AIMessage(content=f"Hypothesis generated: {response}")]
+                "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
             }
         except Exception as e:
             logger.error("Error in hypothesis agent", exc_info=True)
             return {
                 "response": f"Error generating hypothesis: {str(e)}",
                 "error": str(e),
-                "messages": [AIMessage(content=f"Error in hypothesis generation: {str(e)}")]
+                "messages": [
+                    AIMessage(content=f"Error in hypothesis generation: {str(e)}")
+                ],
             }
-    
+
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle general information queries"""
-        logger.info(f"RAG agent processing query: {state['user_query']} for user: {state['user_id']}")
+        logger.info(
+            f"RAG agent processing query: {state['user_query']} for user: {state['user_id']} with pdf_ids: {state.get('pdf_ids')}"
+        )
         try:
-            emit_to_user(user=state["user_id"],message="Retrieving information...")
-            response = self.rag.get_result_from_rag(state["user_query"], state["user_id"])
-            
+            emit_to_user(user=state["user_id"], message="Retrieving information...")
+            response = self.rag.get_result_from_rag(
+                state["user_query"], state["user_id"], pdf_ids=state.get("pdf_ids")
+            )
+
+            # Extract the text from the RAG response
+            if response and isinstance(response, dict) and "text" in response:
+                response_text = response["text"]
+            else:
+                response_text = str(response) if response else "No response generated"
+
             return {
-                "response": response,
-                "messages": [AIMessage(content=f"RAG query processed: {response}")]
+                "response": response_text,
+                "messages": [
+                    AIMessage(content=f"RAG query processed: {response_text}")
+                ],
             }
         except Exception as e:
             logger.error("Error in RAG agent", exc_info=True)
             return {
                 "response": f"Error retrieving information: {str(e)}",
                 "error": str(e),
-                "messages": [AIMessage(content=f"Error in RAG processing: {str(e)}")]
+                "messages": [AIMessage(content=f"Error in RAG processing: {str(e)}")],
             }
-    
+
     def _galaxy_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle Galaxy tools and workflows queries"""
-        logger.info(f"Galaxy agent processing query: {state['user_query']} for user: {state['user_id']}")
+        logger.info(
+            f"Galaxy agent processing query: {state['user_query']} for user: {state['user_id']}"
+        )
         try:
-            emit_to_user(user=state["user_id"], message="Retrieving Galaxy tools information...")
-            response = self.galaxy_handler.get_galaxy_info(state["user_query"], state["user_id"])
-            
+            emit_to_user(
+                user=state["user_id"], message="Retrieving Galaxy tools information..."
+            )
+            response = self.galaxy_handler.get_galaxy_info(
+                state["user_query"], state["user_id"]
+            )
+
             return {
                 "response": response,
-                "messages": [AIMessage(content=f"Galaxy query processed: {response}")]
+                "messages": [AIMessage(content=f"Galaxy query processed: {response}")],
             }
         except Exception as e:
             logger.error("Error in galaxy agent", exc_info=True)
             return {
                 "response": f"Error retrieving Galaxy information: {str(e)}",
                 "error": str(e),
-                "messages": [AIMessage(content=f"Error in Galaxy processing: {str(e)}")]
+                "messages": [
+                    AIMessage(content=f"Error in Galaxy processing: {str(e)}")
+                ],
             }
 
     def _finalize_response(self, state: AgentState) -> Dict[str, Any]:
         """Finalize and return the response"""
         response = state.get("response", "No response generated")
-        logger.info(f"Finalizing response for user: {state.get('user_id')}, response length: {len(str(response))}")
-        
-        return {
-            "messages": [AIMessage(content=f"Final response: {response}")]
-        }
-    
-    def agent(self, message: str, user_id: str, token: str) -> str:
+        logger.info(
+            f"Finalizing response for user: {state.get('user_id')}, response length: {len(str(response))}"
+        )
+
+        return {"messages": [AIMessage(content=f"Final response: {response}")]}
+
+    def agent(
+        self,
+        message: str,
+        user_id: str,
+        token: str,
+        pdf_ids: Optional[List[str]] = None,
+    ) -> str:
         """Main entry point for processing queries"""
-        logger.info(f"Agent called with message: {message}, user_id: {user_id}")
+        logger.info(
+            f"Agent called with message: {message}, user_id: {user_id}, pdf_ids: {pdf_ids}"
+        )
         try:
             # Create initial state
             initial_state = {
@@ -287,170 +385,235 @@ class AiAssistance:
                 "token": token,
                 "query_type": "",
                 "response": "",
-                "error": ""
+                "error": "",
+                "pdf_ids": pdf_ids,
             }
-            
+
             # Run the workflow
             result = self.app.invoke(initial_state)
-            
+
             # Extract response
             response = result.get("response", "")
             if response:
                 return response
-            
+
             # Fallback to last message content
             if result.get("messages"):
                 last_message = result["messages"][-1]
-                if hasattr(last_message, 'content'):
+                if hasattr(last_message, "content"):
                     return last_message.content
-            
+
             return "No response generated"
-            
+
         except Exception as e:
             logger.error("Error in agent processing", exc_info=True)
             return f"Error processing query: {str(e)}"
 
-    async def assistant(self, query, user_id: str, token: str, resource=None,graph_id=None):
-        logger.info(f"Assistant called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}")
+    async def assistant(
+        self,
+        query,
+        user_id: str,
+        token: str,
+        resource=None,
+        graph_id=None,
+        pdf_ids: Optional[List[str]] = None,
+    ):
+        logger.info(
+            f"Assistant called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}, pdf_ids: {pdf_ids}"
+        )
 
         try:
             user_information = self.store.get_context_and_memory(user_id)
             history = []
             memory = []
             for item in user_information:
-                q = item['QUESTION']['question']
-                c = item['QUESTION']['context']
-                m = item['MEMORIES']
-                history.append({'question': q, 'context': c})
+                q = item["QUESTION"]["question"]
+                c = item["QUESTION"]["context"]
+                m = item["MEMORIES"]
+                history.append({"question": q, "context": c})
                 memory.append(m)
-        except:
+            pdf_summaries = self.get_pdf_summaries(user_id, pdf_ids)
+        except Exception as e:
             history = ""
             memory = ""
-            
+            pdf_summaries = []
+
         logger.info(f"Histories of the user are : {history} and memories are {memory}")
         graph_context = None
         if graph_id:
-            logger.info(f"Graph id has been passed to the given query {query} answering based on the graph")
-            graph_context = self.answer_from_graph_summaries(query,user_id,resource,token,graph_id)
+            logger.info(
+                f"Graph id has been passed to the given query {query} answering based on the graph"
+            )
+            graph_context = self.answer_from_graph_summaries(
+                query, user_id, resource, token, graph_id
+            )
             return graph_context
-       
+
         prompt = conversation_prompt.format(
-            memory = memory,
-            query = query,
-            history = history,
-            user_context = graph_context) 
-        
+            memory=memory,
+            query=query,
+            history=history,
+            conversation_history=history,
+            user_context=graph_context,
+            pdf_summaries=pdf_summaries,
+        )
+
         response = self.advanced_llm.generate(prompt)
-        emit_to_user(user=user_id,message="Analyzing...")
+        emit_to_user(user=user_id, message="Analyzing...")
         if response:
             if "response:" in response:
                 result = response.split("response:")[1].strip()
                 final_response = result.strip('"')
-                await self.store.save_user_information(advanced_llm=self.advanced_llm, query=query, user_id=user_id, context=None)
+                await self.store.save_user_information(
+                    advanced_llm=self.advanced_llm,
+                    query=query,
+                    user_id=user_id,
+                    context=None,
+                )
                 self.history.create_history(user_id, query, final_response)
-                emit_to_user(user=user_id,message=final_response,status="completed")
+                emit_to_user(user=user_id, message=final_response, status="completed")
                 return {"text": final_response}
-                
+
             elif "question:" in response:
                 refactored_question = response.split("question:")[1].strip()
-                agent_response = self.agent(refactored_question, user_id, token)
-
+                agent_response = self.agent(
+                    refactored_question, user_id, token, pdf_ids=pdf_ids
+                )
                 if isinstance(agent_response, str):
-                    agent_response = json.loads(agent_response)
-                
-                resource_type = agent_response.get('resource', {}).get('type') if agent_response else None
-                
+                    agent_response = {"text": agent_response}
+                elif isinstance(agent_response, dict):
+                    pass
+                else:
+                    agent_response = {"text": str(agent_response)}
+
+                resource_type = (
+                    agent_response.get("resource", {}).get("type")
+                    if agent_response
+                    else None
+                )
+
+                response_resource = None
                 if resource_type:
                     response_resource = f"successfully made {resource_type}"
                     logger.info(f"Here is the resource {response_resource}")
 
-                await self.store.save_user_information(advanced_llm=self.advanced_llm, query=query, user_id=user_id, context=response_resource)
-                emit_to_user(user=user_id,message=agent_response,status="completed")
-                self.history.create_history(user_id, query, agent_response)
+                emit_to_user(user=user_id, message=agent_response, status="completed")
+                # Extract text from agent_response for history storage
+                assistant_answer = (
+                    agent_response.get("text", str(agent_response))
+                    if isinstance(agent_response, dict)
+                    else str(agent_response)
+                )
+                self.history.create_history(user_id, query, assistant_answer)
                 return agent_response
         else:
             logger.error("No response generated from LLM")
-            await self.store.save_user_information(self.advanced_llm, query, user_id, resource)
-            emit_to_user(user=user_id,message={"text": "I'm sorry, I couldn't generate a response at this time."},status="completed")
-            error_msg = "I apologize, but I encountered an error while processing your request."
-            emit_to_user(user=user_id,message={"text": error_msg}, status="completed")
+            await self.store.save_user_information(
+                self.advanced_llm, query, user_id, resource
+            )
+            emit_to_user(
+                user=user_id,
+                message={
+                    "text": "I'm sorry, I couldn't generate a response at this time."
+                },
+                status="completed",
+            )
+            error_msg = (
+                "I apologize, but I encountered an error while processing your request."
+            )
+            emit_to_user(user=user_id, message={"text": error_msg}, status="completed")
             return {"text": error_msg}, history
-    
-    def answer_from_graph_summaries(self,query,user_id,resource,token,graph_id):
-        logger.info(f"Answer from graph summaries called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}")
+
+    def answer_from_graph_summaries(self, query, user_id, resource, token, graph_id):
+        logger.info(
+            f"Answer from graph summaries called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}"
+        )
         if query:
             logger.debug("Query provided with graph_id")
             summary = None
             if resource == "annotation":
                 # Process summary with query
                 summary = self.graph_summarizer.summary(token=token, graph_id=graph_id)
-                emit_to_user(user=user_id,message="Analyzing...")
+                emit_to_user(user=user_id, message="Analyzing...")
 
             elif resource == "hypothesis":
-                summary = self.hypothesis_generation.get_by_hypothesis_id(token,graph_id,user_id,query)
-                emit_to_user(user=user_id,message="Analyzing...")
+                summary = self.hypothesis_generation.get_by_hypothesis_id(
+                    token, graph_id, user_id, query
+                )
+                emit_to_user(user=user_id, message="Analyzing...")
                 logger.info(f"Summaries of the graph id {graph_id} is {summary}")
-            
+
             prompt = classifier_prompt.format(query=query, graph_summary=summary)
             response = self.advanced_llm.generate(prompt)
             if response.startswith("related:"):
                 logger.info("question is related with the graph")
-                query_response = response[len("related:"):].strip()
+                query_response = response[len("related:") :].strip()
                 # creating users history
                 self.history.create_history(user_id, query, query_response)
                 logger.info(f"user query is {query} response is {query_response}")
-                return {"text":query_response}
+                return {"text": query_response}
             elif "not" in response:
                 return None
 
         logger.info("Only Graphid is provided")
         if resource == "annotation":
             # Process summary without query
-            summary = self.graph_summarizer.summary(token=token, graph_id=graph_id, user_query=None)
+            summary = self.graph_summarizer.summary(
+                token=token, graph_id=graph_id, user_query=None
+            )
             return summary
         elif resource == "hypothesis":
             logger.info("Hypothesis resource, no query provided")
-            summary = self.hypothesis_generation.get_by_hypothesis_id(token,graph_id,query)
+            summary = self.hypothesis_generation.get_by_hypothesis_id(
+                token, graph_id, query
+            )
             return {"text": summary}
         else:
             logger.error(f"Unsupported resource type: '{resource}'")
             return {"text": f"Unsupported resource type: '{resource}'"}
 
-    def file_storage(self,file,query,graph,user_id):
-        logger.info(f"File storage called with file: {file.filename if file else None}, query: {query}, user_id: {user_id}")
-        if (file and query) or (file and graph):
-            return {"text":"please pass a file to be uploaded or a query with/without graph ids not both"}
-        if file:
-            if file.filename.lower().endswith('.pdf'):
-                response = self.rag.save_retrievable_docs(file,user_id,filter=True)   
-                self.history.create_history(user_id, query, json.dumps(response))
-                return response
-            else:
-                response = {
-                    'text': "Only PDF files are supported."
-                    }
-                return response, 400
-            
-    def assistant_response(self,query,user_id,token,graph=None,graph_id=None,file=None,resource="annotation",json_query=None):  
-        logger.info(f"Assistant response called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}")
+    def assistant_response(
+        self,
+        query,
+        user_id,
+        token,
+        graph=None,
+        graph_id=None,
+        file=None,
+        resource="annotation",
+        json_query=None,
+        pdf_ids=None,
+    ):
+        logger.info(
+            f"Assistant response called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}, pdf_ids: {pdf_ids}"
+        )
         try:
-            logger.info(f"passes parameters are query = {query}, user_id= {user_id}, graphid={graph_id}, graph = {graph}, resource = {resource}")
-            if file:
-                response = self.file_storage(file,query,graph,user_id)
-                return response
-
-            logger.info(f"agent being called for a given query {query} from resource {resource}")
-            response = asyncio.run(self.assistant(query=query, user_id=user_id, token=token,resource=resource,graph_id=graph_id))
-            return response 
+            logger.info(
+                f"passes parameters are query = {query}, user_id= {user_id}, graphid={graph_id}, graph = {graph}, resource = {resource}, pdf_ids = {pdf_ids}"
+            )
+            logger.info(
+                f"agent being called for a given query {query} from resource {resource} with pdf_ids: {pdf_ids}"
+            )
+            response = asyncio.run(
+                self.assistant(
+                    query=query,
+                    user_id=user_id,
+                    token=token,
+                    resource=resource,
+                    graph_id=graph_id,
+                    pdf_ids=pdf_ids,
+                )
+            )
+            return response
 
             # if query and graph:
             #     summary = self.graph_summarizer.summary(user_query=query,graph=graph)
-            #     self.history.create_history(user_id, query, response)             
+            #     self.history.create_history(user_id, query, response)
             #     return summary
 
             # if graph:
             #     summary = self.graph_summarizer.summary(user_query=query,graph=graph)
-            #     self.history.create_history(user_id, query, response)     
+            #     self.history.create_history(user_id, query, response)
             #     return summary
 
             # if json_query:
