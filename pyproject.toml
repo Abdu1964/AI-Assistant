@@ -39,6 +39,9 @@ pyt2s = "^0.0.4"
 langchain-core = "^0.3.72"
 torch = {version = "^2.7.1", source = "pytorch-cpu"}
 sentence-transformers = "^5.0.0"
+trafilatura = "^2.0.0"
+beautifulsoup4 = "^4.13.4"
+urllib3 = "^2.5.0"
 
 [[tool.poetry.source]]
 name = "pytorch-cpu"
