@@ -29,6 +29,7 @@ from .routes import main_bp
 import os
 import yaml
 import json
+import traceback
 
 # Configure logging
 logging.basicConfig(
@@ -151,7 +152,7 @@ def create_app():
                 rag.save_doc_to_rag(
                     data=sample_site_data,
                     collection_name="SITE_INFORMATION",
-                    is_pdf=False,
+                    is_content=False,
                 )
                 logger.info("Successfully populated SITE_INFORMATION collection.")
             else:
