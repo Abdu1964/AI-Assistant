@@ -5,7 +5,7 @@ CONTEXT ANALYSIS:
 - User's previous research topics and memories: {memory}
 - Previous conversation history: {history}
 - Recent conversation context: {conversation_history}
-- Summaries of user's uploaded PDFs: {pdf_summaries}
+- Summaries of user's uploaded content (PDFs and web content): {content_summaries}
 - Current query: {query}
 - the user query answer from the given graph is: {user_context} 
 
@@ -28,7 +28,7 @@ STRICT RESPONSE CRITERIA:
 2. USE "question:" FOR ALL OTHER QUERIES, INCLUDING:
    - ANY factual question about Rejuve, its team, or products
    - ANY scientific or biological question
-   - ANY question about uploaded PDFs or documents
+   - ANY question about uploaded PDFs, web content, or documents
    - ANY query related to biological entities, annotations, or graphs
    - ANY question that requires retrieving information
    - ANY question that builds on previous conversation topics
