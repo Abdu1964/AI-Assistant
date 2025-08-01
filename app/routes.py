@@ -24,12 +24,12 @@ def process_query(current_user_id, auth_token):
         - user_id: The user's identifier (string).
         - question: The user's question or prompt (string).
         - context: JSON string with keys:
-            - id: For PDF queries, a list of PDF IDs; for other resources, a single ID.
-            - resource: The type of resource (e.g., 'pdf', 'annotation', 'hypothesis').
+            - id: For content queries, a list of content IDs; for other resources, a single ID.
+            - resource: The type of resource (e.g., 'content', 'annotation', 'hypothesis').
         - graph, json_query: Optional, for advanced queries.
-    - For PDF queries (resource == 'pdf'), pdf_ids are extracted from context['id'].
-    - If pdf_ids are provided, answers are retrieved only from those PDFs; otherwise, answers are retrieved from all collections (user and general).
-    - Handles both user-uploaded PDF question answering and general knowledge queries.
+    - For content queries (resource == 'content'), content_ids are extracted from context['id'].
+    - If content_ids are provided, answers are retrieved only from those content items; otherwise, answers are retrieved from all collections (user and general).
+    - Handles both user-uploaded content question answering and general knowledge queries.
     """
     try:
         ai_assistant = current_app.config["ai_assistant"]
@@ -47,21 +47,21 @@ def process_query(current_user_id, auth_token):
         graph = data.get("graph", None)
         json_query = data.get("json_query", None)
 
-        # Determine pdf_ids if resource is pdf and id is a list or string
-        pdf_ids = None
-        if resource == "pdf":
+        # Determine content_ids if resource is content and id is a list or string
+        content_ids = None
+        if resource == "content":
             if isinstance(context_id, list):
-                pdf_ids = context_id
+                content_ids = context_id
             elif isinstance(context_id, str):
                 # If it's a comma-separated string, split it
                 if context_id.strip().startswith("["):
                     try:
-                        pdf_ids = json.loads(context_id)
+                        content_ids = json.loads(context_id)
                     except Exception:
-                        pdf_ids = [context_id]
+                        content_ids = [context_id]
                 else:
-                    pdf_ids = [
-                        pid.strip() for pid in context_id.split(",") if pid.strip()
+                    content_ids = [
+                        cid.strip() for cid in context_id.split(",") if cid.strip()
                     ]
 
         # Ensure query exists before processing
@@ -73,11 +73,11 @@ def process_query(current_user_id, auth_token):
             query=question,
             user_id=user_id,
             token=auth_token,
-            graph_id=context_id if resource != "pdf" else None,
+            graph_id=context_id if resource != "content" else None,
             graph=graph,
             resource=resource,
             json_query=json_query,
-            pdf_ids=pdf_ids,
+            content_ids=content_ids,
         )
 
         return jsonify(response)
@@ -87,78 +87,119 @@ def process_query(current_user_id, auth_token):
         return f"Bad Response: {e}", 400
 
 
-@main_bp.route("/rag/upload_pdf", methods=["POST"])
+@main_bp.route("/rag/upload_content", methods=["POST"])
 @token_required
-def upload_pdf(current_user_id, auth_token):
-    # Upload and process PDF documents using the RAG module
+def upload_content(current_user_id, auth_token):
+    """
+    Unified endpoint for uploading both PDF files and web content
+    Accepts either files (PDFs) or URLs (web content)
+    """
     try:
         user_id = request.form.get("user_id")
         if not user_id:
             return jsonify(error="Missing user_id"), 400
 
-        if "files" not in request.files:
-            return jsonify(error="No files uploaded"), 400
-
-        files = request.files.getlist("files")
-        if not files or files[0].filename == "":
-            return jsonify(error="No files selected"), 400
-
         ai_assistant = current_app.config["ai_assistant"]
         results = []
-        for uploaded in files:
-            # Only allow PDF files
-            if not uploaded.filename.lower().endswith(".pdf"):
-                results.append(
-                    {
-                        "filename": uploaded.filename,
-                        "error": "Only PDF files are allowed.",
-                    }
-                )
-                continue
-            # Delegate all processing to the RAG module
-            response = ai_assistant.rag.save_retrievable_docs(uploaded, user_id)
-            results.append({"filename": uploaded.filename, "response": response})
+
+        # Handle PDF files
+        if "files" in request.files:
+            files = request.files.getlist("files")
+            for uploaded in files:
+                if uploaded.filename and uploaded.filename.lower().endswith(".pdf"):
+                    response = ai_assistant.rag.save_retrievable_docs(uploaded, user_id)
+                    results.append(
+                        {"filename": uploaded.filename, "response": response}
+                    )
+                else:
+                    results.append(
+                        {
+                            "filename": uploaded.filename,
+                            "error": "Only PDF files are allowed.",
+                        }
+                    )
+
+        # Handle web URLs
+        urls = request.form.getlist("urls")
+        for url in urls:
+            if url and url.strip():
+                response = ai_assistant.rag.save_web_content(url.strip(), user_id)
+                results.append({"url": url.strip(), "response": response})
+
         return jsonify(results=results), 200
     except Exception as e:
-        current_app.logger.error(f"PDF upload error: {e}")
+        current_app.logger.error(f"Content upload error: {e}")
         traceback.print_exc()
-        return jsonify(error=f"Error uploading PDF: {str(e)}"), 500
+        return jsonify(error=f"Error uploading content: {str(e)}"), 500
 
 
 @main_bp.route("/rag/user_status", methods=["GET"])
 @token_required
 def user_status(current_user_id, auth_token):
-    # Get user's PDF status and limits
+    # Get user's content status and limits (PDFs + web content)
     try:
         data = request.form
         user_id = data.get("user_id") or current_user_id
         if not user_id:
             return jsonify(error="Missing user_id"), 400
 
-        pdf_files = db_manager.get_user_pdfs(user_id)
-        count = db_manager.get_pdf_count(user_id)
-        files = [
-            {
-                "filename": pdf.filename,
-                "pdf_id": pdf.pdf_id,
-                "num_pages": pdf.num_pages,
-                "file_size": pdf.file_size,
-                "upload_time": (
-                    pdf.upload_time.strftime("%Y-%m-%d %H:%M:%S")
-                    if pdf.upload_time
-                    else None
-                ),
-                "summary": pdf.summary,
-            }
-            for pdf in pdf_files
-        ]
-        PDF_LIMIT = 5
+        # Get all content files using unified method
+        all_content_files = db_manager.get_user_content_files(user_id)
+
+        # Separate PDF and web content
+        pdf_files_data = []
+        web_files_data = []
+
+        for content in all_content_files:
+            if content.content_type == "pdf":
+                pdf_files_data.append(
+                    {
+                        "filename": content.filename,
+                        "content_id": content.content_id,
+                        "content_type": "pdf",
+                        "num_pages": content.num_pages,
+                        "file_size": content.file_size,
+                        "upload_time": (
+                            content.upload_time.strftime("%Y-%m-%d %H:%M:%S")
+                            if content.upload_time
+                            else None
+                        ),
+                        "summary": content.summary,
+                    }
+                )
+            elif content.content_type == "web":
+                web_files_data.append(
+                    {
+                        "url": content.url,
+                        "title": content.title,
+                        "author": content.author,
+                        "content_id": content.content_id,
+                        "content_type": "web",
+                        "file_size": content.file_size,
+                        "upload_time": (
+                            content.upload_time.strftime("%Y-%m-%d %H:%M:%S")
+                            if content.upload_time
+                            else None
+                        ),
+                        "summary": content.summary,
+                    }
+                )
+
+        # Get counts using unified methods
+        total_count = db_manager.get_content_count(user_id)
+        pdf_count = db_manager.get_content_count(user_id, "pdf")
+        web_count = db_manager.get_content_count(user_id, "web")
+
+        # Combine all content
+        all_files = pdf_files_data + web_files_data
+
         return (
             jsonify(
                 user_id=user_id,
-                count=count,
-                limit=PDF_LIMIT,
-                files=files,
+                total_count=total_count,
+                pdf_count=pdf_count,
+                web_count=web_count,
+                files=all_files,
             ),
             200,
         )
@@ -172,26 +213,30 @@ def user_status(current_user_id, auth_token):
 @main_bp.route("/rag/clear_user_data", methods=["DELETE"])
 @token_required
 def clear_user_data(current_user_id, auth_token):
-    # Clear all PDF data and conversation history for a specific user
+    # Clear all content data and conversation history for a specific user
     try:
         data = request.form
         user_id = data.get("user_id") or current_user_id
         if not user_id:
             return jsonify(error="Missing user_id"), 400
 
-        # 1. Delete all PDF files for this user from DB and disk
-        pdf_files = db_manager.get_user_pdfs(user_id)
-        for pdf in pdf_files:
-            # Remove PDF file from storage
-            pdf_path = os.path.join("storage/pdfs", f"{pdf.pdf_id}.pdf")
-            if os.path.exists(pdf_path):
-                os.remove(pdf_path)
-            db_manager.delete_pdf_file(user_id, pdf.pdf_id)
+        # Get all content files using unified method
+        all_content_files = db_manager.get_user_content_files(user_id)
 
-        # 2. Clear conversation history (and related memory/context)
+        for content in all_content_files:
+            if content.content_type == "pdf":
+                # Remove PDF file from storage
+                pdf_path = os.path.join("storage/pdfs", f"{content.content_id}.pdf")
+                if os.path.exists(pdf_path):
+                    os.remove(pdf_path)
+
+            # Remove from database using unified method
+            db_manager.delete_content_file(user_id, content.content_id)
+
+        # Clear conversation history
         HistoryManager().clear_user_history(user_id)
 
-        # 3. Clear Qdrant collection for this user
+        # Clear Qdrant collection for this user
         try:
             qdrant_client = current_app.config["qdrant_client"]
             qdrant_client.client.delete_collection(collection_name=user_id)
@@ -210,35 +255,51 @@ def clear_user_data(current_user_id, auth_token):
         return jsonify(error=f"Error clearing user data: {str(e)}"), 500
 
 
-@main_bp.route("/rag/delete_pdf", methods=["DELETE"])
+@main_bp.route("/rag/delete_content", methods=["DELETE"])
 @token_required
-def delete_pdf(current_user_id, auth_token):
+def delete_content(current_user_id, auth_token):
+    # Unified endpoint for deleting content (PDF or web)
     try:
         data = request.form
         user_id = data.get("user_id")
-        pdf_id = data.get("pdf_id")
-        if not user_id or not pdf_id:
-            return jsonify(error="Missing user_id or pdf_id"), 400
+        content_id = data.get("content_id")
+        content_type = data.get("content_type", "pdf")
+        if not user_id or not content_id:
+            return jsonify(error="Missing user_id or content_id"), 400
 
-        # Remove PDF file from storage
-        pdf_path = os.path.join("storage/pdfs", f"{pdf_id}.pdf")
-        if os.path.exists(pdf_path):
-            os.remove(pdf_path)
-        else:
-            current_app.logger.warning(f"PDF file {pdf_path} not found for deletion.")
+        # Get content details from database
+        content_file = db_manager.get_content_file_by_id(user_id, content_id)
+        if not content_file:
+            return jsonify(error="Content not found for this user"), 404
+
+        # Handle PDF-specific deletion
+        if content_type == "pdf" or content_file.content_type == "pdf":
+            # Remove PDF file from storage
+            pdf_path = os.path.join("storage/pdfs", f"{content_id}.pdf")
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+            else:
+                current_app.logger.warning(
+                    f"PDF file {pdf_path} not found for deletion."
+                )
 
         # Remove from database
-        db_manager.delete_pdf_file(user_id, pdf_id)
+        db_manager.delete_content_file(user_id, content_id)
 
         # Remove from Qdrant
         qdrant_client = current_app.config["qdrant_client"]
-        qdrant_client.delete_pdf_by_id(user_id, pdf_id)
+        qdrant_client.delete_content_by_id(user_id, content_id)
 
-        return jsonify(message=f"PDF {pdf_id} deleted for user {user_id}"), 200
+        return (
+            jsonify(
+                message=f"{content_file.content_type.upper()} {content_id} deleted for user {user_id}"
+            ),
+            200,
+        )
     except Exception as e:
-        current_app.logger.error(f"Delete PDF error: {e}")
+        current_app.logger.error(f"Delete content error: {e}")
         traceback.print_exc()
-        return jsonify(error=f"Error deleting PDF: {str(e)}"), 500
+        return jsonify(error=f"Error deleting content: {str(e)}"), 500
 
 
 @main_bp.route("/rag/audio/summary", methods=["GET"])
@@ -248,36 +309,31 @@ def get_summary_audio(current_user_id, auth_token):
     try:
         data = request.form
         user_id = data.get("user_id") if data else None
-        pdf_id = data.get("pdf_id") if data else None
+        content_id = data.get("content_id") if data else None
 
-        if not user_id or not pdf_id:
-            return jsonify(error="Missing user_id or pdf_id"), 400
+        if not user_id or not content_id:
+            return jsonify(error="Missing user_id or content_id"), 400
 
         # Redis cache key
-        cache_key = f"audio:summary:{user_id}:{pdf_id}"
+        cache_key = f"audio:summary:{user_id}:{content_id}"
         audio_data = redis_manager.get_audio_cache(cache_key)
         if audio_data:
             current_app.logger.info(
-                f"[AUDIO CACHE] Served summary audio for user_id={user_id}, pdf_id={pdf_id} from Redis cache."
+                f"[AUDIO CACHE] Served summary audio for user_id={user_id}, content_id={content_id} from Redis cache."
             )
             return Response(audio_data, mimetype="audio/mpeg")
 
-        # Get user's PDF data to find the summary
-        pdf_files = db_manager.get_user_pdfs(user_id)
-        target_file = None
-        for pdf in pdf_files:
-            if pdf.pdf_id == pdf_id:
-                target_file = pdf
-                break
+        # Get content file using unified method
+        content_file = db_manager.get_content_file_by_id(user_id, content_id)
 
-        if not target_file:
-            return jsonify(error="PDF not found for this user"), 404
+        if not content_file:
+            return jsonify(error="Content not found for this user"), 404
 
         # Get the summary from the stored user data
-        summary_text = target_file.summary or ""
+        summary_text = content_file.summary or ""
 
         if not summary_text:
-            return jsonify(error="No summary found for this PDF"), 404
+            return jsonify(error="No summary found for this content"), 404
 
         # Generate audio on-demand
         audio_data = tts_manager.generate_audio_on_demand(summary_text, voice="russell")
