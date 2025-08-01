@@ -2,6 +2,7 @@
 FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1
+ENV POETRY_HTTP_TIMEOUT=300
 
 # Set the working directory
 WORKDIR /AI-Assistant
@@ -12,8 +13,9 @@ RUN pip install poetry
 # Copy the application code
 COPY . /AI-Assistant
 
-# Install dependencies
-RUN poetry config virtualenvs.create false && poetry install --no-root
+# Install dependencies 
+RUN poetry config virtualenvs.create false && \
+    poetry install --no-root --no-interaction
 
 # Run the application
 CMD ["gunicorn", "-w", "4", "--bind", "0.0.0.0:$FLASK_PORT", "run:app"]
