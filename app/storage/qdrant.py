@@ -8,7 +8,6 @@ import uuid
 import logging
 
 MAX_MEMORY_LIMIT = 10
-MAX_PDF_LIMIT = 2
 USER_COLLECTION = os.getenv("USER_COLLECTION", "USER_COLLECTIONS")
 USER_MEMORY_NAME = "user memories"
 
@@ -71,28 +70,32 @@ class Qdrant:
                 )
                 raise create_error
 
-    def delete_pdf_by_id(self, collection_name, pdf_id):
-        # Delete all points in the given collection (user_id) with the specified pdf_id.
+    def delete_content_by_id(self, collection_name, content_id):
+        """
+        Delete all points in the given collection with the specified content_id.
+        Works for both PDF and web content.
+        """
         try:
             self.ensure_collection_exists(collection_name)
+
             self.client.delete(
                 collection_name=collection_name,
                 points_selector=models.Filter(
                     must=[
                         models.FieldCondition(
-                            key="pdf_id",
-                            match=models.MatchValue(value=pdf_id),
+                            key="content_id",
+                            match=models.MatchValue(value=content_id),
                         )
                     ]
                 ),
             )
             logger.info(
-                f"Deleted all points for pdf_id {pdf_id} in collection {collection_name}"
+                f"Deleted all points for content_id {content_id} in collection {collection_name}"
             )
             return True
         except Exception as e:
             logger.error(
-                f"Error deleting pdf_id {pdf_id} from collection {collection_name}: {e}"
+                f"Error deleting content_id {content_id} from collection {collection_name}: {e}"
             )
             return False
 
@@ -100,25 +103,27 @@ class Qdrant:
         self,
         collection_name,
         data,
-        is_pdf=False,
+        is_content=False,
         chunks=None,
         metadata=None,
     ):
         """
         Unified method to upsert data to Qdrant collection.
-        Handles both PDF chunks and general data (list of dicts).
+        Handles both content chunks and general data (list of dicts).
 
         :param collection_name: The collection name
-        :param data: List of dictionaries for general data, or None for PDF data
-        :param is_pdf: Boolean indicating if this is PDF data
-        :param chunks: List of text chunks (only for PDF data)
-        :param metadata: Metadata dictionary (only for PDF data)
+        :param data: List of dictionaries for general data, or None for content data
+        :param is_content: Boolean indicating if this is content data (PDF/web)
+        :param chunks: List of text chunks (only for content data)
+        :param metadata: Metadata dictionary (only for content data)
         """
         try:
-            if is_pdf:
-                # Handle PDF data using chunks and metadata
+            if is_content:
+                # Handle content data using chunks and metadata
                 if chunks is None or metadata is None:
-                    raise ValueError("chunks and metadata are required for PDF data")
+                    raise ValueError(
+                        "chunks and metadata are required for content data"
+                    )
 
                 self.ensure_collection_exists(collection_name)
                 meta = metadata or {}
@@ -139,13 +144,13 @@ class Qdrant:
                         )
                     self.client.upsert(collection_name=collection_name, points=points)
 
-                logger.info("PDF chunks saved")
-                return "PDF Data Successfully Uploaded"
+                logger.info("Content chunks saved")
+                return "Content Data Successfully Uploaded"
             else:
                 # Handle general data (list of dicts)
                 if data is None or not isinstance(data, list):
                     raise ValueError(
-                        "data must be a list of dictionaries for non-PDF data"
+                        "data must be a list of dictionaries for non-content data"
                     )
 
                 self.ensure_collection_exists(collection_name)
@@ -194,16 +199,22 @@ class Qdrant:
             logger.error(f"Error saving: {e}")
 
     def retrieve_similar_content(
-        self, collection_name, query, user_id=None, pdf_ids=None, top_k=10, filter=None
+        self,
+        collection_name,
+        query,
+        user_id=None,
+        content_ids=None,
+        top_k=10,
+        filter=None,
     ):
         """
-        Unified retrieval method for Qdrant. Supports filtering by user_id, pdf_ids, or both.
+        Unified retrieval method for Qdrant. Supports filtering by user_id, content_ids, or combinations.
         :param collection_name: The Qdrant collection to search.
         :param query: The query string or vector.
         :param user_id: Optional user ID to filter results.
-        :param pdf_ids: Optional list of PDF IDs to filter results.
+        :param content_ids: Optional list of content IDs to filter results (for any content type).
         :param top_k: Number of results to return.
-        :param filter: If True, applies user/pdf filtering; if False, general search.
+        :param filter: If True, applies user/content filtering; if False, general search.
         :return: List of relevant results.
         """
         try:
@@ -240,10 +251,10 @@ class Qdrant:
                         key="user_id", match=models.MatchValue(value=user_id)
                     )
                 )
-            if pdf_ids:
+            if content_ids:
                 filters.append(
                     models.FieldCondition(
-                        key="pdf_id", match=models.MatchAny(any=pdf_ids)
+                        key="content_id", match=models.MatchAny(any=content_ids)
                     )
                 )
             query_filter = models.Filter(must=filters) if filters else None

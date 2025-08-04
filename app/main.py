@@ -55,7 +55,7 @@ class AgentState(TypedDict):
     query_type: str
     response: str
     error: str
-    pdf_ids: Optional[List[str]]
+    content_ids: Optional[List[str]]
 
 
 class AiAssistance:
@@ -188,30 +188,52 @@ class AiAssistance:
 
         return workflow
 
-    def get_pdf_summaries(self, user_id, pdf_ids=None):
-        pdf_summaries = []
-        user_pdfs = self.store.get_user_pdfs(user_id)
-        if pdf_ids:
-            filtered_pdfs = [pdf for pdf in user_pdfs if pdf.pdf_id in pdf_ids]
+    def get_content_summaries(self, user_id, content_ids=None):
+        # Get summaries for all content types (PDF and web)
+        content_summaries = []
+
+        # Get all content files for the user
+        all_content = self.store.get_user_content_files(user_id)
+
+        if content_ids:
+            # Filter by specific content IDs
+            filtered_content = [
+                content for content in all_content if content.content_id in content_ids
+            ]
         else:
-            filtered_pdfs = user_pdfs
-        for pdf in filtered_pdfs:
-            pdf_summaries.append(
-                {
-                    "pdf_id": pdf.pdf_id,
-                    "filename": pdf.filename,
-                    "summary": pdf.summary or "",
-                }
-            )
-        return pdf_summaries
+            # Get all content
+            filtered_content = all_content
+
+        for content in filtered_content:
+            if content.content_type == "pdf":
+                content_summaries.append(
+                    {
+                        "content_id": content.content_id,
+                        "content_type": "pdf",
+                        "filename": content.filename,
+                        "summary": content.summary or "",
+                    }
+                )
+            elif content.content_type == "web":
+                content_summaries.append(
+                    {
+                        "content_id": content.content_id,
+                        "content_type": "web",
+                        "url": content.url,
+                        "title": content.title,
+                        "summary": content.summary or "",
+                    }
+                )
+
+        return content_summaries
 
     def _classify_query(self, state: AgentState) -> Dict[str, Any]:
         query = state["user_query"]
         user_id = state["user_id"]
-        pdf_ids = state.get("pdf_ids")
+        content_ids = state.get("content_ids")
 
-        # Fetch PDF summaries using helper
-        pdf_summaries = self.get_pdf_summaries(user_id, pdf_ids)
+        # Fetch content summaries using helper
+        content_summaries = self.get_content_summaries(user_id, content_ids)
 
         logger.info(f"Classifying query: {query}")
 
@@ -219,9 +241,9 @@ class AiAssistance:
         - annotation: Requests for factual information about genes, proteins, variants, or biological graphs/networks
         - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
         - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
-        - rag: General information requests, including queries about uploaded PDFs or document profiles (e.g., questions about PDF summaries, metadata, or content)
+        - rag: General information requests, including queries about uploaded PDFs, web content, or document profiles (e.g., questions about content summaries, metadata, or content)
         User query: {query}
-        PDF summaries: {pdf_summaries}
+        Content summaries: {content_summaries}
         Respond ONLY with the category name."
         """
 
@@ -301,12 +323,14 @@ class AiAssistance:
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle general information queries"""
         logger.info(
-            f"RAG agent processing query: {state['user_query']} for user: {state['user_id']} with pdf_ids: {state.get('pdf_ids')}"
+            f"RAG agent processing query: {state['user_query']} for user: {state['user_id']} with content_ids: {state.get('content_ids')}"
         )
         try:
             emit_to_user(user=state["user_id"], message="Retrieving information...")
             response = self.rag.get_result_from_rag(
-                state["user_query"], state["user_id"], pdf_ids=state.get("pdf_ids")
+                state["user_query"],
+                state["user_id"],
+                content_ids=state.get("content_ids"),
             )
 
             # Extract the text from the RAG response
@@ -370,11 +394,11 @@ class AiAssistance:
         message: str,
         user_id: str,
         token: str,
-        pdf_ids: Optional[List[str]] = None,
+        content_ids: Optional[List[str]] = None,
     ) -> str:
         """Main entry point for processing queries"""
         logger.info(
-            f"Agent called with message: {message}, user_id: {user_id}, pdf_ids: {pdf_ids}"
+            f"Agent called with message: {message}, user_id: {user_id}, content_ids: {content_ids}"
         )
         try:
             # Create initial state
@@ -386,7 +410,7 @@ class AiAssistance:
                 "query_type": "",
                 "response": "",
                 "error": "",
-                "pdf_ids": pdf_ids,
+                "content_ids": content_ids,
             }
 
             # Run the workflow
@@ -416,10 +440,10 @@ class AiAssistance:
         token: str,
         resource=None,
         graph_id=None,
-        pdf_ids: Optional[List[str]] = None,
+        content_ids: Optional[List[str]] = None,
     ):
         logger.info(
-            f"Assistant called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}, pdf_ids: {pdf_ids}"
+            f"Assistant called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}, content_ids: {content_ids}"
         )
 
         try:
@@ -432,11 +456,11 @@ class AiAssistance:
                 m = item["MEMORIES"]
                 history.append({"question": q, "context": c})
                 memory.append(m)
-            pdf_summaries = self.get_pdf_summaries(user_id, pdf_ids)
+            content_summaries = self.get_content_summaries(user_id, content_ids)
         except Exception as e:
             history = ""
             memory = ""
-            pdf_summaries = []
+            content_summaries = []
 
         logger.info(f"Histories of the user are : {history} and memories are {memory}")
         graph_context = None
@@ -455,7 +479,7 @@ class AiAssistance:
             history=history,
             conversation_history=history,
             user_context=graph_context,
-            pdf_summaries=pdf_summaries,
+            content_summaries=content_summaries,
         )
 
         response = self.advanced_llm.generate(prompt)
@@ -477,7 +501,10 @@ class AiAssistance:
             elif "question:" in response:
                 refactored_question = response.split("question:")[1].strip()
                 agent_response = self.agent(
-                    refactored_question, user_id, token, pdf_ids=pdf_ids
+                    refactored_question,
+                    user_id,
+                    token,
+                    content_ids=content_ids,
                 )
                 if isinstance(agent_response, str):
                     agent_response = {"text": agent_response}
@@ -582,17 +609,17 @@ class AiAssistance:
         file=None,
         resource="annotation",
         json_query=None,
-        pdf_ids=None,
+        content_ids=None,
     ):
         logger.info(
-            f"Assistant response called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}, pdf_ids: {pdf_ids}"
+            f"Assistant response called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}, content_ids: {content_ids}"
         )
         try:
             logger.info(
-                f"passes parameters are query = {query}, user_id= {user_id}, graphid={graph_id}, graph = {graph}, resource = {resource}, pdf_ids = {pdf_ids}"
+                f"passes parameters are query = {query}, user_id= {user_id}, graphid={graph_id}, graph = {graph}, resource = {resource}, content_ids = {content_ids}"
             )
             logger.info(
-                f"agent being called for a given query {query} from resource {resource} with pdf_ids: {pdf_ids}"
+                f"agent being called for a given query {query} from resource {resource} with content_ids: {content_ids}"
             )
             response = asyncio.run(
                 self.assistant(
@@ -601,7 +628,7 @@ class AiAssistance:
                     token=token,
                     resource=resource,
                     graph_id=graph_id,
-                    pdf_ids=pdf_ids,
+                    content_ids=content_ids,
                 )
             )
             return response
