@@ -29,14 +29,27 @@ redis = "^6.2.0"
 flask-socketio = "^5.5.1"
 eventlet = "^0.40.1"
 websocket-client = "^1.8.0"
-langgraph = "^0.5.0"
-sentence-transformers = "^4.1.0"
+langgraph = "^0.6.0"
 pymupdf = "^1.26.1"
 pymupdf4llm = "^0.0.25"
-langchain = "^0.1.9"
-langchain-text-splitters = "^0.0.1"
-pyt2s = "^0.1.0"
-pypdf = "^5.9.0"
+langchain = "^0.3.27"
+langchain-text-splitters = "^0.3.9"
+pyt2s = "^0.0.4"
+langchain-core = "^0.3.72"
+torch = {version = "^2.7.1", source = "pytorch-cpu"}
+sentence-transformers = "^5.0.0"
+trafilatura = "^2.0.0"
+beautifulsoup4 = "^4.13.4"
+urllib3 = "^2.5.0"
+
+[[tool.poetry.source]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "supplemental"
+
+[[tool.poetry.source]]
+name = "PyPI"
+priority = "primary"
 
 [build-system]
 requires = ["poetry-core"]

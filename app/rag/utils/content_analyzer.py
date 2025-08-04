@@ -12,8 +12,8 @@ import re
 logger = logging.getLogger(__name__)
 
 
-class PDFAnalyzer:
-    def __init__(self, use_openai=False):
+class ContentAnalyzer:
+    def __init__(self, use_openai=True):
         # Use the LLM models from llm_models.py
         if use_openai:
             self.llm_model = get_llm_model("openai", "gpt-3.5-turbo")
@@ -74,7 +74,7 @@ class PDFAnalyzer:
             logger.error(f"Error extracting topics: {e}")
             return []
 
-    def generate_summary(self, text_content, user_id=None, pdf_id=None):
+    def generate_summary(self, text_content):
         try:
             max_chars = 12000
             if len(text_content) > max_chars:
@@ -104,7 +104,13 @@ class PDFAnalyzer:
             logger.error(f"Error generating suggested questions: {e}")
             return []
 
-    def analyze_pdf_content(self, text_content):
+    def analyze_content(self, text_content, content_type="pdf"):
+        """
+        Analyze content (PDF or web) and extract insights
+        Args:
+            text_content: The text content to analyze
+            content_type: Either 'pdf' or 'web'
+        """
         try:
             keywords = self.extract_keywords(text_content)
             topics = self.extract_topics(text_content)
@@ -115,12 +121,14 @@ class PDFAnalyzer:
                 "topics": topics,
                 "summary": summary,
                 "suggested_questions": questions,
+                "content_type": content_type,
             }
         except Exception as e:
-            logger.error(f"Error in complete PDF analysis: {e}")
+            logger.error(f"Error in complete content analysis: {e}")
             return {
                 "keywords": [],
                 "topics": [],
                 "summary": "Unable to generate summary at this time.",
                 "suggested_questions": [],
+                "content_type": content_type,
             }
