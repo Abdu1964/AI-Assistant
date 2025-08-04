@@ -15,7 +15,7 @@ class GalaxyHandler:
         emit_to_user(user=user_id,message='processing your query on Galaxy in real time.')
         response = requests.post(GALAXY_MESSAGE_URL, json=payload)
         if response.status_code == 200:
-            response = {"text":response.json().get("response"),"resource":{"type":"galaxy",id:None}}
+            response = {"text":response.json().get("response"),"resource":{"type":"galaxy","id":None}}
             return response
         else:
             return {"text": f"I apologize, but I wasn't able to generate what you requested. Could you please rephrase your question."}
