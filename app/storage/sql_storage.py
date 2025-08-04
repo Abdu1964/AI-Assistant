@@ -48,17 +48,31 @@ class UserInformation(Base):
     assistant_answer = Column(Text, nullable=True)
 
 
-class UserPDFFile(Base):
-    __tablename__ = "user_pdf_file"
+class UserContentFile(Base):
+    __tablename__ = "user_content_file"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, index=True, nullable=False)
-    pdf_id = Column(String, unique=True, nullable=False)
-    filename = Column(String, nullable=False)
-    num_pages = Column(Integer)
+    content_id = Column(String, unique=True, nullable=False)
+    content_type = Column(String, default="pdf")  # 'pdf' or 'web'
+
+    # PDF-specific fields (nullable for web content)
+    filename = Column(String, nullable=True)
+    num_pages = Column(Integer, nullable=True)
+
+    # Web-specific fields (nullable for PDFs)
+    url = Column(String, nullable=True)
+    title = Column(String, nullable=True)
+    author = Column(String, nullable=True)
+    publish_date = Column(DateTime, nullable=True)
+
+    # Common fields
     file_size = Column(Float)
     upload_time = Column(DateTime)
     summary = Column(Text)
+    keywords = Column(Text, nullable=True)
+    topics = Column(Text, nullable=True)
+    suggested_questions = Column(Text, nullable=True)
 
 
 # Create tables
@@ -260,60 +274,143 @@ class DatabaseManager:
             print(f"Error saving user information: {e}")
             return None
 
-    # PDF File CRUD Methods
-    def add_pdf_file(
-        self, user_id, pdf_id, filename, num_pages, file_size, upload_time, summary=None
+    # Content File CRUD Methods (for both PDF and web content)
+    def add_content_file(
+        self,
+        user_id,
+        content_id,
+        content_type="pdf",
+        filename=None,
+        num_pages=None,
+        url=None,
+        title=None,
+        author=None,
+        publish_date=None,
+        file_size=None,
+        upload_time=None,
+        summary=None,
+        keywords=None,
+        topics=None,
+        suggested_questions=None,
     ):
         db = self.get_session()
         try:
-            pdf_file = UserPDFFile(
+            content_file = UserContentFile(
                 user_id=user_id,
-                pdf_id=pdf_id,
+                content_id=content_id,
+                content_type=content_type,
                 filename=filename,
                 num_pages=num_pages,
+                url=url,
+                title=title,
+                author=author,
+                publish_date=publish_date,
                 file_size=file_size,
                 upload_time=upload_time,
                 summary=summary,
+                keywords=keywords,
+                topics=topics,
+                suggested_questions=suggested_questions,
             )
-            db.add(pdf_file)
+            db.add(content_file)
             db.commit()
-            db.refresh(pdf_file)
-            return pdf_file
+            db.refresh(content_file)
+            return content_file
         except Exception as e:
             db.rollback()
             raise e
         finally:
             db.close()
 
-    def get_user_pdfs(self, user_id):
+    def get_user_content_files(self, user_id, content_type=None):
+        # Get all content files for a user, optionally filtered by content type
+        db = self.get_session()
+        try:
+            query = db.query(UserContentFile).filter(UserContentFile.user_id == user_id)
+            if content_type:
+                query = query.filter(UserContentFile.content_type == content_type)
+            return query.order_by(UserContentFile.upload_time.asc()).all()
+        finally:
+            db.close()
+
+    def get_content_file_by_id(self, user_id, content_id):
+        # Get specific content file by ID
         db = self.get_session()
         try:
             return (
-                db.query(UserPDFFile)
-                .filter(UserPDFFile.user_id == user_id)
-                .order_by(UserPDFFile.upload_time.asc())
-                .all()
-            )
-        finally:
-            db.close()
-
-    def get_pdf_count(self, user_id):
-        db = self.get_session()
-        try:
-            return db.query(UserPDFFile).filter(UserPDFFile.user_id == user_id).count()
-        finally:
-            db.close()
-
-    def delete_pdf_file(self, user_id, pdf_id):
-        db = self.get_session()
-        try:
-            pdf_file = (
-                db.query(UserPDFFile)
-                .filter(UserPDFFile.user_id == user_id, UserPDFFile.pdf_id == pdf_id)
+                db.query(UserContentFile)
+                .filter(
+                    UserContentFile.user_id == user_id,
+                    UserContentFile.content_id == content_id,
+                )
                 .first()
             )
-            if pdf_file:
-                db.delete(pdf_file)
+        finally:
+            db.close()
+
+    def get_content_count(self, user_id, content_type=None):
+        # get count of content files for a user, optionally filtered by content type
+        db = self.get_session()
+        try:
+            query = db.query(UserContentFile).filter(UserContentFile.user_id == user_id)
+            if content_type:
+                query = query.filter(UserContentFile.content_type == content_type)
+            return query.count()
+        finally:
+            db.close()
+
+    def update_content_file(
+        self,
+        user_id,
+        content_id,
+        summary=None,
+        keywords=None,
+        topics=None,
+        suggested_questions=None,
+    ):
+        # Update content file metadata
+        db = self.get_session()
+        try:
+            content_file = (
+                db.query(UserContentFile)
+                .filter(
+                    UserContentFile.user_id == user_id,
+                    UserContentFile.content_id == content_id,
+                )
+                .first()
+            )
+            if content_file:
+                if summary is not None:
+                    content_file.summary = summary
+                if keywords is not None:
+                    content_file.keywords = keywords
+                if topics is not None:
+                    content_file.topics = topics
+                if suggested_questions is not None:
+                    content_file.suggested_questions = suggested_questions
+                db.commit()
+                return content_file
+            return None
+        except Exception as e:
+            db.rollback()
+            raise e
+        finally:
+            db.close()
+
+    def delete_content_file(self, user_id, content_id):
+        # Delete content file by ID
+        db = self.get_session()
+        try:
+            content_file = (
+                db.query(UserContentFile)
+                .filter(
+                    UserContentFile.user_id == user_id,
+                    UserContentFile.content_id == content_id,
+                )
+                .first()
+            )
+            if content_file:
+                db.delete(content_file)
                 db.commit()
                 return True
             return False

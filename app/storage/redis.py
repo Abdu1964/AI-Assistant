@@ -16,6 +16,7 @@ class RedisManager:
 
     _instance = None
     _redis_client = None
+    _redis_binary_client = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -34,10 +35,11 @@ class RedisManager:
         if not redis_enabled:
             logger.info("Redis is disabled in configuration")
             self._redis_client = None
+            self._redis_binary_client = None
             return
 
         try:
-            # Single Redis client for both text and binary data
+            # Redis client for text data (with decode_responses=True)
             self._redis_client = redis.from_url(
                 redis_url,
                 decode_responses=True,
@@ -47,21 +49,39 @@ class RedisManager:
                 health_check_interval=30,
             )
 
+            # Separate Redis client for binary data (without decode_responses=True)
+            self._redis_binary_client = redis.from_url(
+                redis_url,
+                decode_responses=False,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                retry_on_timeout=True,
+                health_check_interval=30,
+            )
+
             # Test connection
             self._redis_client.ping()
+            self._redis_binary_client.ping()
             logger.info(f"Redis connection established: {redis_url}")
 
         except redis.ConnectionError as e:
             logger.error(f"Failed to connect to Redis: {e}")
             self._redis_client = None
+            self._redis_binary_client = None
         except Exception as e:
             logger.error(f"Unexpected error initializing Redis: {e}")
             self._redis_client = None
+            self._redis_binary_client = None
 
     @property
     def client(self) -> Optional[redis.Redis]:
-        """Get Redis client instance."""
+        """Get Redis client instance for text data."""
         return self._redis_client
+
+    @property
+    def binary_client(self) -> Optional[redis.Redis]:
+        """Get Redis client instance for binary data."""
+        return self._redis_binary_client
 
     @property
     def is_available(self) -> bool:
@@ -84,6 +104,7 @@ class RedisManager:
         """Attempt to reconnect to Redis."""
         logger.info("Attempting to reconnect to Redis...")
         self._redis_client = None
+        self._redis_binary_client = None
         self._initialize_redis()
 
     def create_graph(self, graph_id=None, graph_summary=None, context=None):
@@ -122,24 +143,26 @@ class RedisManager:
 
     def set_audio_cache(self, key, audio_bytes, expire_seconds=600):
         """Store audio bytes in Redis with a TTL (default 10 minutes)."""
-        if not self.is_available:
+        if not self.is_available or self._redis_binary_client is None:
             logger.warning("Redis not available, cannot cache audio")
             return
 
         try:
-            self._redis_client.set(key, audio_bytes, ex=expire_seconds)
+            # Use binary client for audio data
+            self._redis_binary_client.set(key, audio_bytes, ex=expire_seconds)
             logger.debug(f"Audio cached with key: {key}")
         except Exception as e:
             logger.error(f"Failed to cache audio: {e}")
 
     def get_audio_cache(self, key):
         """Retrieve audio bytes from Redis. Returns None if not found."""
-        if not self.is_available:
+        if not self.is_available or self._redis_binary_client is None:
             logger.warning("Redis not available, cannot retrieve cached audio")
             return None
 
         try:
-            audio_data = self._redis_client.get(key)
+            # Use binary client for audio data
+            audio_data = self._redis_binary_client.get(key)
             return audio_data
         except Exception as e:
             logger.error(f"Failed to retrieve cached audio: {e}")
