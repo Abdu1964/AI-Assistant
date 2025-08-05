@@ -12,7 +12,7 @@ from .prompts.classifier_prompt import classifier_prompt, answer_from_graph
 from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
 from .storage.history_manager import HistoryManager
-from .storage.sql_storage import DatabaseManager
+from .storage.mongo_storage import mongo_db_manager
 from .socket_manager import emit_to_user
 from .Galaxy_integration.galaxy import GalaxyHandler
 import asyncio
@@ -74,7 +74,7 @@ class AiAssistance:
         self.graph_summarizer = Graph_Summarizer(self.advanced_llm)
         self.rag = RAG(llm=advanced_llm, qdrant_client=qdrant_client)
         self.history = HistoryManager()
-        self.store = DatabaseManager()
+        self.store = mongo_db_manager
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
         self.galaxy_handler = GalaxyHandler(advanced_llm)
         self.embedding_model = embedding_model
@@ -198,30 +198,32 @@ class AiAssistance:
         if content_ids:
             # Filter by specific content IDs
             filtered_content = [
-                content for content in all_content if content.content_id in content_ids
+                content
+                for content in all_content
+                if content.get("content_id") in content_ids
             ]
         else:
             # Get all content
             filtered_content = all_content
 
         for content in filtered_content:
-            if content.content_type == "pdf":
+            if content.get("content_type") == "pdf":
                 content_summaries.append(
                     {
-                        "content_id": content.content_id,
+                        "content_id": content.get("content_id"),
                         "content_type": "pdf",
-                        "filename": content.filename,
-                        "summary": content.summary or "",
+                        "filename": content.get("filename"),
+                        "summary": content.get("summary") or "",
                     }
                 )
-            elif content.content_type == "web":
+            elif content.get("content_type") == "web":
                 content_summaries.append(
                     {
-                        "content_id": content.content_id,
+                        "content_id": content.get("content_id"),
                         "content_type": "web",
-                        "url": content.url,
-                        "title": content.title,
-                        "summary": content.summary or "",
+                        "url": content.get("url"),
+                        "title": content.get("title"),
+                        "summary": content.get("summary") or "",
                     }
                 )
 
