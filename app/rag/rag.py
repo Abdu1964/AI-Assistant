@@ -1,7 +1,6 @@
 from app.prompts.rag_prompts import RETRIEVE_PROMPT
 from app.storage.memory_layer import MemoryManager
 from app.storage.history_manager import HistoryManager
-from pypdf import PdfReader
 import traceback
 import os
 import logging
@@ -10,7 +9,7 @@ from datetime import datetime
 import fitz
 from app.rag.utils.content_processor import ContentProcessor
 from app.rag.utils.content_analyzer import ContentAnalyzer
-from app.storage.sql_storage import db_manager
+from app.storage.mongo_storage import mongo_db_manager
 
 
 logging.basicConfig(
@@ -128,19 +127,19 @@ class RAG:
             return_response = {"text": None, "resource": {}}
 
             # Check for duplicate files
-            pdf_files = db_manager.get_user_content_files(user_id, "pdf")
-            if any(f.filename == file.filename for f in pdf_files):
+            pdf_files = mongo_db_manager.get_user_content_files(user_id, "pdf")
+            if any(f.get("filename") == file.filename for f in pdf_files):
                 return_response["text"] = "PDF already exists."
                 return_response["resource"]["filename"] = file.filename
                 return return_response
 
             # Check quota
-            if db_manager.get_content_count(user_id) >= CONTENT_LIMIT:
+            if mongo_db_manager.get_content_count(user_id) >= CONTENT_LIMIT:
                 return_response["text"] = (
                     "Your quota is full. Maximum 10 content items allowed."
                 )
-                return_response["resource"]["count"] = db_manager.get_content_count(
-                    user_id
+                return_response["resource"]["count"] = (
+                    mongo_db_manager.get_content_count(user_id)
                 )
                 return return_response
 
@@ -194,7 +193,7 @@ class RAG:
             )
 
             # Add PDF metadata to the database using unified table
-            db_manager.add_content_file(
+            mongo_db_manager.add_content_file(
                 user_id=user_id,
                 content_id=content_id,
                 content_type="pdf",
@@ -239,19 +238,19 @@ class RAG:
                 return return_response
 
             # Check for duplicate URLs
-            content_files = db_manager.get_user_content_files(user_id, "web")
-            if any(f.url == url for f in content_files):
+            content_files = mongo_db_manager.get_user_content_files(user_id, "web")
+            if any(f.get("url") == url for f in content_files):
                 return_response["text"] = "URL already exists."
                 return_response["resource"]["url"] = url
                 return return_response
 
             # Check quota
-            if db_manager.get_content_count(user_id) >= CONTENT_LIMIT:
+            if mongo_db_manager.get_content_count(user_id) >= CONTENT_LIMIT:
                 return_response["text"] = (
                     "Your quota is full. Maximum 10 content items allowed."
                 )
-                return_response["resource"]["count"] = db_manager.get_content_count(
-                    user_id
+                return_response["resource"]["count"] = (
+                    mongo_db_manager.get_content_count(user_id)
                 )
                 return return_response
 
@@ -291,7 +290,7 @@ class RAG:
             )
 
             # Add web content metadata to the database
-            db_manager.add_content_file(
+            mongo_db_manager.add_content_file(
                 user_id=user_id,
                 content_id=content_id,
                 content_type="web",
