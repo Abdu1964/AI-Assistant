@@ -262,7 +262,7 @@ class Qdrant:
             logger.info(
                 f"Searching collection '{collection_name}' with {len(filters)} filters"
             )
-            hits = self.client.query_points(
+            hits = self.client.search(
                 collection_name=collection_name,
                 query_vector=query,
                 limit=top_k,
@@ -349,7 +349,7 @@ class Qdrant:
     def _retrieve_memory(self, user_id, embedding=None):
         try:
             if embedding:
-                result = self.client.query_points(
+                result = self.client.search(
                     collection_name=USER_COLLECTION,
                     query_vector=embedding,
                     with_payload=True,
