@@ -5,7 +5,7 @@ import traceback
 import json
 import os
 from app.rag.utils.tts_utils import tts_manager
-from app.storage.sql_storage import db_manager
+from app.storage.mongo_storage import mongo_db_manager
 from app.storage.redis import redis_manager
 from app.storage.history_manager import HistoryManager
 
@@ -144,51 +144,51 @@ def user_status(current_user_id, auth_token):
             return jsonify(error="Missing user_id"), 400
 
         # Get all content files using unified method
-        all_content_files = db_manager.get_user_content_files(user_id)
+        all_content_files = mongo_db_manager.get_user_content_files(user_id)
 
         # Separate PDF and web content
         pdf_files_data = []
         web_files_data = []
 
         for content in all_content_files:
-            if content.content_type == "pdf":
+            if content.get("content_type") == "pdf":
                 pdf_files_data.append(
                     {
-                        "filename": content.filename,
-                        "content_id": content.content_id,
+                        "filename": content.get("filename"),
+                        "content_id": content.get("content_id"),
                         "content_type": "pdf",
-                        "num_pages": content.num_pages,
-                        "file_size": content.file_size,
+                        "num_pages": content.get("num_pages"),
+                        "file_size": content.get("file_size"),
                         "upload_time": (
-                            content.upload_time.strftime("%Y-%m-%d %H:%M:%S")
-                            if content.upload_time
+                            content.get("upload_time").strftime("%Y-%m-%d %H:%M:%S")
+                            if content.get("upload_time")
                             else None
                         ),
-                        "summary": content.summary,
+                        "summary": content.get("summary"),
                     }
                 )
-            elif content.content_type == "web":
+            elif content.get("content_type") == "web":
                 web_files_data.append(
                     {
-                        "url": content.url,
-                        "title": content.title,
-                        "author": content.author,
-                        "content_id": content.content_id,
+                        "url": content.get("url"),
+                        "title": content.get("title"),
+                        "author": content.get("author"),
+                        "content_id": content.get("content_id"),
                         "content_type": "web",
-                        "file_size": content.file_size,
+                        "file_size": content.get("file_size"),
                         "upload_time": (
-                            content.upload_time.strftime("%Y-%m-%d %H:%M:%S")
-                            if content.upload_time
+                            content.get("upload_time").strftime("%Y-%m-%d %H:%M:%S")
+                            if content.get("upload_time")
                             else None
                         ),
-                        "summary": content.summary,
+                        "summary": content.get("summary"),
                     }
                 )
 
         # Get counts using unified methods
-        total_count = db_manager.get_content_count(user_id)
-        pdf_count = db_manager.get_content_count(user_id, "pdf")
-        web_count = db_manager.get_content_count(user_id, "web")
+        total_count = mongo_db_manager.get_content_count(user_id)
+        pdf_count = mongo_db_manager.get_content_count(user_id, "pdf")
+        web_count = mongo_db_manager.get_content_count(user_id, "web")
 
         # Combine all content
         all_files = pdf_files_data + web_files_data
@@ -221,17 +221,19 @@ def clear_user_data(current_user_id, auth_token):
             return jsonify(error="Missing user_id"), 400
 
         # Get all content files using unified method
-        all_content_files = db_manager.get_user_content_files(user_id)
+        all_content_files = mongo_db_manager.get_user_content_files(user_id)
 
         for content in all_content_files:
-            if content.content_type == "pdf":
+            if content.get("content_type") == "pdf":
                 # Remove PDF file from storage
-                pdf_path = os.path.join("storage/pdfs", f"{content.content_id}.pdf")
+                pdf_path = os.path.join(
+                    "storage/pdfs", f"{content.get('content_id')}.pdf"
+                )
                 if os.path.exists(pdf_path):
                     os.remove(pdf_path)
 
             # Remove from database using unified method
-            db_manager.delete_content_file(user_id, content.content_id)
+            mongo_db_manager.delete_content_file(user_id, content.get("content_id"))
 
         # Clear conversation history
         HistoryManager().clear_user_history(user_id)
@@ -268,12 +270,12 @@ def delete_content(current_user_id, auth_token):
             return jsonify(error="Missing user_id or content_id"), 400
 
         # Get content details from database
-        content_file = db_manager.get_content_file_by_id(user_id, content_id)
+        content_file = mongo_db_manager.get_content_file_by_id(user_id, content_id)
         if not content_file:
             return jsonify(error="Content not found for this user"), 404
 
         # Handle PDF-specific deletion
-        if content_type == "pdf" or content_file.content_type == "pdf":
+        if content_type == "pdf" or content_file.get("content_type") == "pdf":
             # Remove PDF file from storage
             pdf_path = os.path.join("storage/pdfs", f"{content_id}.pdf")
             if os.path.exists(pdf_path):
@@ -284,7 +286,7 @@ def delete_content(current_user_id, auth_token):
                 )
 
         # Remove from database
-        db_manager.delete_content_file(user_id, content_id)
+        mongo_db_manager.delete_content_file(user_id, content_id)
 
         # Remove from Qdrant
         qdrant_client = current_app.config["qdrant_client"]
@@ -292,7 +294,7 @@ def delete_content(current_user_id, auth_token):
 
         return (
             jsonify(
-                message=f"{content_file.content_type.upper()} {content_id} deleted for user {user_id}"
+                message=f"{content_file.get('content_type', 'unknown').upper()} {content_id} deleted for user {user_id}"
             ),
             200,
         )
@@ -324,13 +326,13 @@ def get_summary_audio(current_user_id, auth_token):
             return Response(audio_data, mimetype="audio/mpeg")
 
         # Get content file using unified method
-        content_file = db_manager.get_content_file_by_id(user_id, content_id)
+        content_file = mongo_db_manager.get_content_file_by_id(user_id, content_id)
 
         if not content_file:
             return jsonify(error="Content not found for this user"), 404
 
         # Get the summary from the stored user data
-        summary_text = content_file.summary or ""
+        summary_text = content_file.get("summary") or ""
 
         if not summary_text:
             return jsonify(error="No summary found for this content"), 404
