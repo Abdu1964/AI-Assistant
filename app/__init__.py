@@ -13,7 +13,7 @@ from app.main import AiAssistance
 from app.rag.rag import RAG
 from app.socket_manager import init_socketio
 from app.storage.qdrant import Qdrant
-from app.storage.sql_storage import create_tables
+from app.storage.mongo_storage import MongoManager
 from app.annotation_graph.schema_handler import SchemaHandler
 from app.llm_handle.llm_models import (
     get_llm_model,
@@ -57,15 +57,12 @@ def load_config():
 
 
 def initialize_database():
-    """Initialize the SQLite database with tables only - no sample data"""
+    """Initialize MongoDB database - collections are created automatically"""
     try:
-        print("Initializing SQLite database...")
-
-        data_dir = os.getenv("DATABASE_DIR", "./data")
-        os.makedirs(data_dir, exist_ok=True)
-
-        create_tables()
-        print("Database tables created successfully!")
+        print(
+            "MongoDB collections are created automatically when first document is inserted"
+        )
+        print("Database initialization completed!")
 
     except Exception as e:
         print(f"Error initializing database: {str(e)}")
@@ -167,6 +164,11 @@ def create_app():
             f"An error occurred during the application setup for SITE_INFORMATION: {e}",
             exc_info=True,
         )
+
+    # Initialize MongoDB manager
+    mongo_db_manager = MongoManager()
+    app.config["mongo_db_manager"] = mongo_db_manager
+    logger.info("MongoDB manager initialized and stored in app config")
 
     # Initialize AiAssistance with shared qdrant_client and embedding_model
     ai_assistant = AiAssistance(
