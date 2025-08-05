@@ -1,6 +1,7 @@
 from app.prompts.rag_prompts import RETRIEVE_PROMPT
 from app.storage.memory_layer import MemoryManager
 from app.storage.history_manager import HistoryManager
+from pypdf import PdfReader
 import traceback
 import os
 import logging
