@@ -41,6 +41,7 @@ sentence-transformers = "^5.0.0"
 trafilatura = "^2.0.0"
 beautifulsoup4 = "^4.13.4"
 urllib3 = "^2.5.0"
+pymongo = "^4.13.2"
 
 [[tool.poetry.source]]
 name = "pytorch-cpu"
