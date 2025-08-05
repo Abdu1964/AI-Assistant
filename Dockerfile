@@ -2,7 +2,7 @@
 FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1
-ENV POETRY_HTTP_TIMEOUT=300
+ENV POETRY_HTTP_TIMEOUT=600
 
 # Set the working directory
 WORKDIR /AI-Assistant
