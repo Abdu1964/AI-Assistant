@@ -436,3 +436,9 @@ def clear_user_history(current_user_id, auth_token):
     except Exception as e:
         current_app.logger.error(f"Error clearing history: {e}")
         return jsonify(error=f"Error clearing history: {str(e)}"), 500
+
+
+
+@main_bp.route('/', methods=['GET'])  
+def health_check():
+    return jsonify("This is health check")
