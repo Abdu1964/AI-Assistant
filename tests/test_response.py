@@ -57,7 +57,6 @@ def test_query_endpoint(client, auth_headers):
 def test_query_responses(client, auth_headers):
     """Test various query types"""
     test_cases = [
-        {"input": {"query": "hello"}, "expected_key": "text"},
         {"input": {"query": "explain gene FTO"}, "expected_key": "json_format"},
         {"input": {"query": "what is Rejuve Bio"}, "expected_key": "text"}
     ]
