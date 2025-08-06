@@ -1,0 +1,78 @@
+name: Deploy AI Assistant to Production
+
+on:
+  push:
+    branches:
+      - update_agents #specific branch
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    # Set environment variables at job level so all steps can access them
+    env:
+      # Secrets
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      
+      # Variables
+      ADVANCED_LLM_PROVIDER: ${{ vars.ADVANCED_LLM_PROVIDER }}
+      ADVANCED_LLM_VERSION: ${{ vars.ADVANCED_LLM_VERSION }}
+      BASIC_LLM_PROVIDER: ${{ vars.BASIC_LLM_PROVIDER }}
+      BASIC_LLM_VERSION: ${{ vars.BASIC_LLM_VERSION }}
+      FLASK_PORT: ${{ vars.FLASK_PORT }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: latest
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+        
+    - name: Load cached venv
+      id: cached-poetry-dependencies
+      uses: actions/cache@v3
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+        
+    - name: Install dependencies
+      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+      run: poetry install --no-interaction
+      
+    - name: Create required directories
+      run: |
+        mkdir -p logfiles
+
+    - name: Debug environment variables   
+      run: |
+        echo "JWT_SECRET is set: $([[ -n "$JWT_SECRET" ]] && echo "YES" || echo "NO")"
+        echo "JWT_SECRET length: ${#JWT_SECRET}"
+        echo "GEMINI_API_KEY is set: $([[ -n "$GEMINI_API_KEY" ]] && echo "YES" || echo "NO")"
+        echo "GEMINI_API_KEY length: ${#GEMINI_API_KEY}"
+        
+        echo "ADVANCED_LLM_PROVIDER: $ADVANCED_LLM_PROVIDER"
+        echo "ADVANCED_LLM_VERSION: $ADVANCED_LLM_VERSION"
+        echo "BASIC_LLM_PROVIDER: $BASIC_LLM_PROVIDER"
+        echo "BASIC_LLM_VERSION: $BASIC_LLM_VERSION"
+        echo "FLASK_PORT: $FLASK_PORT"
+        
+        echo "ADVANCED_LLM_PROVIDER is set: $([[ -n "$ADVANCED_LLM_PROVIDER" ]] && echo "YES" || echo "NO")"
+        echo "ADVANCED_LLM_VERSION is set: $([[ -n "$ADVANCED_LLM_VERSION" ]] && echo "YES" || echo "NO")"
+        echo "BASIC_LLM_PROVIDER is set: $([[ -n "$BASIC_LLM_PROVIDER" ]] && echo "YES" || echo "NO")"
+        echo "BASIC_LLM_VERSION is set: $([[ -n "$BASIC_LLM_VERSION" ]] && echo "YES" || echo "NO")"
+        echo "FLASK_PORT is set: $([[ -n "$FLASK_PORT" ]] && echo "YES" || echo "NO")"
+
+    - name: Run tests
+      run: |
+        poetry run pytest tests/test_response.py -v --disable-warnings
