@@ -10,3 +10,4 @@ logfiles
 data
 test.py
 rag_user_pdf.json
+poetry.lock
