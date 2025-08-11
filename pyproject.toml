@@ -4,6 +4,9 @@ version = "0.0.1"
 description = ""
 authors = []
 readme = "README.md"
+packages = [
+  { include = "ai_assistant" }
+]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
