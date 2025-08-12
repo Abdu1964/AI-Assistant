@@ -93,9 +93,13 @@ def upload_content(current_user_id, auth_token):
     """
     Unified endpoint for uploading both PDF files and web content
     Accepts either files (PDFs) or URLs (web content)
+    accepts a question to answer after upload (optional)
     """
     try:
         user_id = request.form.get("user_id")
+        question = request.form.get(
+            "question"
+        )  # Optional question to answer after upload
         if not user_id:
             return jsonify(error="Missing user_id"), 400
 
@@ -108,9 +112,30 @@ def upload_content(current_user_id, auth_token):
             for uploaded in files:
                 if uploaded.filename and uploaded.filename.lower().endswith(".pdf"):
                     response = ai_assistant.rag.save_retrievable_docs(uploaded, user_id)
-                    results.append(
-                        {"filename": uploaded.filename, "response": response}
-                    )
+                    item = {"filename": uploaded.filename, "response": response}
+                    # If a question is provided and upload succeeded, answer from this PDF only
+                    try:
+                        if (
+                            question
+                            and isinstance(response, dict)
+                            and response.get("text") == "PDF uploaded successfully."
+                        ):
+                            content_id = response.get("resource", {}).get("content_id")
+                            if content_id:
+                                answer = ai_assistant.assistant_response(
+                                    query=question,
+                                    user_id=user_id,
+                                    token=auth_token,
+                                    resource="content",
+                                    graph_id=None,
+                                    content_ids=[content_id],
+                                )
+                                item["answer"] = answer or {
+                                    "text": "No answer generated"
+                                }
+                    except Exception:
+                        traceback.print_exc()
+                    results.append(item)
                 else:
                     results.append(
                         {
@@ -123,8 +148,30 @@ def upload_content(current_user_id, auth_token):
         urls = request.form.getlist("urls")
         for url in urls:
             if url and url.strip():
-                response = ai_assistant.rag.save_web_content(url.strip(), user_id)
-                results.append({"url": url.strip(), "response": response})
+                clean_url = url.strip()
+                response = ai_assistant.rag.save_web_content(clean_url, user_id)
+                item = {"url": clean_url, "response": response}
+                # If a question is provided and upload succeeded, answer from this URL only
+                try:
+                    if (
+                        question
+                        and isinstance(response, dict)
+                        and response.get("text") == "Web content added successfully."
+                    ):
+                        content_id = response.get("resource", {}).get("content_id")
+                        if content_id:
+                            answer = ai_assistant.assistant_response(
+                                query=question,
+                                user_id=user_id,
+                                token=auth_token,
+                                resource="content",
+                                graph_id=None,
+                                content_ids=[content_id],
+                            )
+                            item["answer"] = answer or {"text": "No answer generated"}
+                except Exception:
+                    traceback.print_exc()
+                results.append(item)
 
         return jsonify(results=results), 200
     except Exception as e:
