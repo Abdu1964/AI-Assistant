@@ -35,7 +35,7 @@ def process_query(current_user_id, auth_token):
         ai_assistant = current_app.config["ai_assistant"]
         data = request.form
 
-        user_id = data.get("user_id") or current_user_id
+        user_id = current_user_id
         question = data.get("question") or data.get("query")
         context_raw = data.get("context", "{}")
         try:
@@ -87,7 +87,7 @@ def process_query(current_user_id, auth_token):
         return f"Bad Response: {e}", 400
 
 
-@main_bp.route("/rag/upload_content", methods=["POST"])
+@main_bp.route("/upload_content", methods=["POST"])
 @token_required
 def upload_content(current_user_id, auth_token):
     """
@@ -96,7 +96,7 @@ def upload_content(current_user_id, auth_token):
     accepts a question to answer after upload (optional)
     """
     try:
-        user_id = request.form.get("user_id")
+        user_id = current_user_id
         question = request.form.get(
             "question"
         )  # Optional question to answer after upload
@@ -180,7 +180,7 @@ def upload_content(current_user_id, auth_token):
         return jsonify(error=f"Error uploading content: {str(e)}"), 500
 
 
-@main_bp.route("/rag/user_status", methods=["GET"])
+@main_bp.route("/user_status/documents/", methods=["GET"])
 @token_required
 def user_status(current_user_id, auth_token):
     # Get user's content status and limits (PDFs + web content)
@@ -257,7 +257,7 @@ def user_status(current_user_id, auth_token):
         return jsonify(error=f"Error getting user status: {str(e)}"), 500
 
 
-@main_bp.route("/rag/clear_user_data", methods=["DELETE"])
+@main_bp.route("/clear_user_data", methods=["DELETE"])
 @token_required
 def clear_user_data(current_user_id, auth_token):
     # Clear all content data and conversation history for a specific user
@@ -304,7 +304,7 @@ def clear_user_data(current_user_id, auth_token):
         return jsonify(error=f"Error clearing user data: {str(e)}"), 500
 
 
-@main_bp.route("/rag/delete_content", methods=["DELETE"])
+@main_bp.route("/delete_content", methods=["DELETE"])
 @token_required
 def delete_content(current_user_id, auth_token):
     # Unified endpoint for deleting content (PDF or web)
@@ -351,7 +351,7 @@ def delete_content(current_user_id, auth_token):
         return jsonify(error=f"Error deleting content: {str(e)}"), 500
 
 
-@main_bp.route("/rag/audio/summary", methods=["GET"])
+@main_bp.route("/audio/summary", methods=["GET"])
 @token_required
 def get_summary_audio(current_user_id, auth_token):
     # Generate and serve summary audio on-demand, with Redis caching
