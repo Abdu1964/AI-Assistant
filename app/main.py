@@ -7,6 +7,7 @@ from .llm_handle.llm_models import (
 from .annotation_graph.annotated_graph import Graph
 from .annotation_graph.schema_handler import SchemaHandler
 from .rag.rag import RAG
+from .rag.utils.web_search import SimpleWebSearch
 from .prompts.conversation_handler import conversation_prompt
 from .prompts.classifier_prompt import classifier_prompt, answer_from_graph
 from .summarizer import Graph_Summarizer
@@ -236,16 +237,21 @@ class AiAssistance:
 
         # Fetch content summaries using helper
         content_summaries = self.get_content_summaries(user_id, content_ids)
+        # include web context in the prompt for better classification
+        web_urls = SimpleWebSearch().get_context_urls(query, num_results=2)
+        web_context = f"Web context: {', '.join(web_urls)}" if web_urls else ""
 
         logger.info(f"Classifying query: {query}")
-
         classifier_prompt = f"""Classify this query into one of these categories:
         - annotation: Requests for factual information about genes, proteins, variants, or biological graphs/networks
         - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
         - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
         - rag: General information requests, including queries about uploaded PDFs, web content, or document profiles (e.g., questions about content summaries, metadata, or content)
+        
         User query: {query}
         Content summaries: {content_summaries}
+        {web_context}
+        
         Respond ONLY with the category name."
         """
 
