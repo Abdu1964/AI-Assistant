@@ -1,12 +1,12 @@
-
-# test_api.py
+# test_response.py
 import pytest
 import os
 import jwt
 import io
 import json
+import logging
+from unittest.mock import patch, MagicMock
 from dotenv import load_dotenv
-from app import create_app
 
 # Load test environment variables (only if .env exists)
 if os.path.exists('.env'):
@@ -20,10 +20,43 @@ if JWT_SECRET is None:
 TEST_USER_ID = "some_id"
 TEST_TOKEN = jwt.encode({"user_id": TEST_USER_ID}, JWT_SECRET, algorithm="HS256")
 
+@pytest.fixture(scope="session", autouse=True)
+def mock_external_services():
+    """Mock MongoDB, Redis, and Qdrant connections"""
+    # Mock MongoDB
+    mongo_client_mock = MagicMock()
+    mongo_db_mock = MagicMock()
+    mongo_collection_mock = MagicMock()
+    
+    mongo_client_mock.__getitem__.return_value = mongo_db_mock
+    mongo_db_mock.__getitem__.return_value = mongo_collection_mock
+    mongo_collection_mock.create_index = MagicMock()
+    
+    # Mock Redis
+    redis_mock = MagicMock()
+    redis_mock.ping.return_value = True
+    
+    # Mock Qdrant
+    qdrant_mock = MagicMock()
+    qdrant_collection_mock = MagicMock()
+    qdrant_mock.get_collection.return_value = qdrant_collection_mock
+    
+    # Mock logging handler with proper level attribute
+    log_mock = MagicMock()
+    log_mock.level = logging.INFO  # Set a proper level
+    log_mock.emit = MagicMock()
+    
+    with patch('pymongo.MongoClient', return_value=mongo_client_mock), \
+         patch('redis.Redis', return_value=redis_mock), \
+         patch('qdrant_client.QdrantClient', return_value=qdrant_mock), \
+         patch('logging.handlers.TimedRotatingFileHandler', return_value=log_mock):
+        yield
+
 @pytest.fixture
 def client():
     """Create test client with test config"""
-    app,socket = create_app()
+    from app import create_app
+    app, socket = create_app()
     with app.test_client() as client:
         yield client
 
