@@ -113,15 +113,38 @@ def upload_content(current_user_id, auth_token):
                 if uploaded.filename and uploaded.filename.lower().endswith(".pdf"):
                     response = ai_assistant.rag.save_retrievable_docs(uploaded, user_id)
                     item = {"filename": uploaded.filename, "response": response}
-                    # If a question is provided and upload succeeded, answer from this PDF only
-                    try:
-                        if (
-                            question
-                            and isinstance(response, dict)
-                            and response.get("text") == "PDF uploaded successfully."
-                        ):
+
+                    # Handle question answering for both new uploads and duplicates
+                    if question and isinstance(response, dict):
+                        content_id = None
+                        is_duplicate = response.get("text") == "PDF already exists."
+
+                        if is_duplicate:
+                            # Get the existing content ID for this filename
+                            pdf_files = mongo_db_manager.get_user_content_files(
+                                user_id, "pdf"
+                            )
+                            existing_content = next(
+                                (
+                                    f
+                                    for f in pdf_files
+                                    if f.get("filename") == uploaded.filename
+                                ),
+                                None,
+                            )
+                            if existing_content:
+                                content_id = existing_content.get("content_id")
+                                # Update the response text to indicate question was answered
+                                item["response"][
+                                    "text"
+                                ] = "PDF already exists, but question was answered using existing content."
+                        else:
+                            # New upload - get content_id from response
                             content_id = response.get("resource", {}).get("content_id")
-                            if content_id:
+
+                        # Answer the question if we have a content_id
+                        if content_id:
+                            try:
                                 answer = ai_assistant.assistant_response(
                                     query=question,
                                     user_id=user_id,
@@ -133,8 +156,10 @@ def upload_content(current_user_id, auth_token):
                                 item["answer"] = answer or {
                                     "text": "No answer generated"
                                 }
-                    except Exception:
-                        traceback.print_exc()
+                            except Exception:
+                                traceback.print_exc()
+                                item["answer"] = {"text": "Error answering question"}
+
                     results.append(item)
                 else:
                     results.append(
@@ -151,15 +176,33 @@ def upload_content(current_user_id, auth_token):
                 clean_url = url.strip()
                 response = ai_assistant.rag.save_web_content(clean_url, user_id)
                 item = {"url": clean_url, "response": response}
-                # If a question is provided and upload succeeded, answer from this URL only
-                try:
-                    if (
-                        question
-                        and isinstance(response, dict)
-                        and response.get("text") == "Web content added successfully."
-                    ):
+
+                # Handle question answering for both new uploads and duplicates
+                if question and isinstance(response, dict):
+                    content_id = None
+                    is_duplicate = response.get("text") == "URL already exists."
+
+                    if is_duplicate:
+                        # Get the existing content ID for this URL
+                        web_files = mongo_db_manager.get_user_content_files(
+                            user_id, "web"
+                        )
+                        existing_content = next(
+                            (f for f in web_files if f.get("url") == clean_url), None
+                        )
+                        if existing_content:
+                            content_id = existing_content.get("content_id")
+                            # Update the response text to indicate question was answered
+                            item["response"][
+                                "text"
+                            ] = "URL already exists, but question was answered using existing content."
+                    else:
+                        # New upload - get content_id from response
                         content_id = response.get("resource", {}).get("content_id")
-                        if content_id:
+
+                    # Answer the question if we have a content_id
+                    if content_id:
+                        try:
                             answer = ai_assistant.assistant_response(
                                 query=question,
                                 user_id=user_id,
@@ -169,8 +212,10 @@ def upload_content(current_user_id, auth_token):
                                 content_ids=[content_id],
                             )
                             item["answer"] = answer or {"text": "No answer generated"}
-                except Exception:
-                    traceback.print_exc()
+                        except Exception:
+                            traceback.print_exc()
+                            item["answer"] = {"text": "Error answering question"}
+
                 results.append(item)
 
         return jsonify(results=results), 200
@@ -485,7 +530,6 @@ def clear_user_history(current_user_id, auth_token):
         return jsonify(error=f"Error clearing history: {str(e)}"), 500
 
 
-
-@main_bp.route('/', methods=['GET'])  
+@main_bp.route("/", methods=["GET"])
 def health_check():
     return jsonify("This is health check")
