@@ -501,8 +501,11 @@ class AiAssistance:
                     query=query,
                     user_id=user_id,
                     context=None,
+                    graph_id_referenced=graph_id,
                 )
-                self.history.create_history(user_id, query, final_response)
+                self.history.create_history(
+                    user_id, query, final_response, graph_id_referenced=graph_id
+                )
                 emit_to_user(user=user_id, message=final_response, status="completed")
                 return {"text": final_response}
 
@@ -539,12 +542,18 @@ class AiAssistance:
                     if isinstance(agent_response, dict)
                     else str(agent_response)
                 )
-                self.history.create_history(user_id, query, assistant_answer)
+                self.history.create_history(
+                    user_id, query, assistant_answer, graph_id_referenced=graph_id
+                )
                 return agent_response
         else:
             logger.error("No response generated from LLM")
             await self.store.save_user_information(
-                self.advanced_llm, query, user_id, resource
+                self.advanced_llm,
+                query,
+                user_id,
+                resource,
+                graph_id_referenced=graph_id,
             )
             emit_to_user(
                 user=user_id,
@@ -584,7 +593,9 @@ class AiAssistance:
                 logger.info("question is related with the graph")
                 query_response = response[len("related:") :].strip()
                 # creating users history
-                self.history.create_history(user_id, query, query_response)
+                self.history.create_history(
+                    user_id, query, query_response, graph_id_referenced=graph_id
+                )
                 logger.info(f"user query is {query} response is {query_response}")
                 return {"text": query_response}
             elif "not" in response:
