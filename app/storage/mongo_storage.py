@@ -58,6 +58,7 @@ class MongoManager:
         user_question: str,
         memory: dict = None,
         context: dict = None,
+        graph_id_referenced: str = None,
     ):
         try:
             # Clean old records (keep only 3 most recent)
@@ -69,6 +70,7 @@ class MongoManager:
                 "user_question": user_question,
                 "memory": json.dumps(memory) if memory else None,
                 "context": json.dumps(context) if context else None,
+                "graph_id_referenced": graph_id_referenced,
                 "time": datetime.utcnow(),
                 "assistant_answer": None,
                 "created_at": datetime.utcnow(),
@@ -323,10 +325,16 @@ class MongoManager:
             logger.error(f"Error getting context and memory: {e}")
             return []
 
-    async def save_user_information(self, advanced_llm, query, user_id, context=None):
+    async def save_user_information(
+        self, advanced_llm, query, user_id, context=None, graph_id_referenced=None
+    ):
         try:
             user_info = self.create_user_information(
-                user_id=user_id, user_question=query, memory="", context=context
+                user_id=user_id,
+                user_question=query,
+                memory="",
+                context=context,
+                graph_id_referenced=graph_id_referenced,
             )
             logger.info(
                 f"Saved user information with question_id: {user_info['question_id']}"
