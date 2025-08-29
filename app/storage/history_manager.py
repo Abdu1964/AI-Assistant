@@ -4,7 +4,9 @@ import uuid
 
 
 class HistoryManager:
-    def create_history(self, user_id, user_message, assistant_answer):
+    def create_history(
+        self, user_id, user_message, assistant_answer, graph_id_referenced=None
+    ):
         # Generate a unique query_id
         query_id = str(uuid.uuid4())
 
@@ -14,6 +16,7 @@ class HistoryManager:
             user_question=user_message,
             memory=None,
             context=None,
+            graph_id_referenced=graph_id_referenced,
         )
 
         # Update the assistant_answer and question_id for the latest record
@@ -45,6 +48,7 @@ class HistoryManager:
                     "query_id": record.get("question_id"),
                     "user": record.get("user_question"),
                     "assistant answer": record.get("assistant_answer"),
+                    "graph_id_referenced": record.get("graph_id_referenced"),
                     "time": (
                         record.get("time").isoformat() if record.get("time") else None
                     ),
@@ -62,6 +66,7 @@ class HistoryManager:
                 "query_id": record.get("question_id"),
                 "user": record.get("user_question"),
                 "assistant answer": record.get("assistant_answer"),
+                "graph_id_referenced": record.get("graph_id_referenced"),
                 "time": record.get("time").isoformat() if record.get("time") else None,
             }
         return None
