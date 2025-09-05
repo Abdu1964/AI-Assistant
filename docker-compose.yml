@@ -6,12 +6,13 @@ services:
       - static:/static
     ports:
       - "${FLASK_PORT}:${FLASK_PORT}"
-    command: gunicorn -w 4 --bind 0.0.0.0:$FLASK_PORT --timeout 180 --log-level debug run:app
+    command: gunicorn -w 4 --bind 0.0.0.0:$FLASK_PORT --timeout 600 --log-level debug run:app
     restart: always
     depends_on:
       - qdrant
       - redis
       - mongodb
+      - neo4j
     environment:
       - .env
 
@@ -41,7 +42,29 @@ services:
     volumes:
       - mongodb_data:/data/db
 
+  neo4j:
+    image: neo4j:5.15
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    environment:
+      NEO4J_AUTH: ${NEO4J_USERNAME}/${NEO4J_PASSWORD}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_apoc_import_file_use__neo4j__config: "true"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    restart: always
+
 volumes:
   vectordata:
   static:
   mongodb_data:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  neo4j_plugins:
