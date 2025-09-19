@@ -294,6 +294,7 @@ class AiAssistance:
                     ],
                     "pipeline_details": {
                         "cypher_query": cypher_query,
+                        "json_query": pipeline_response.get("json_query", {}),
                         "counts": pipeline_response.get("database_results", {})
                         .get("data", {})
                         .get("counts", pipeline_response.get("counts", {})),
