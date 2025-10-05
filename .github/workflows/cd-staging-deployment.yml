@@ -43,7 +43,7 @@ jobs:
           MONGO_USERNAME=${{ secrets.MONGO_USERNAME }}
           MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD }}
           MONGO_DATABASE=${{ secrets.MONGO_DATABASE }}
-          MONGO_URL="mongodb://${{ secrets.MONGO_USERNAME }}:${{ secrets.MONGO_PASSWORD }}@${{ secrets.MONGODB_HOST }}:${{ secrets.MONGODB_PORT }}/
+          MONGO_URL="mongodb://${{ secrets.MONGO_USERNAME }}:${{ secrets.MONGO_PASSWORD }}@${{ secrets.MONGODB_HOST }}:${{ secrets.MONGODB_PORT }}/${{ secrets.MONGO_DATABASE }}?authSource=admin"
           QDRANT_CLIENT=${{ secrets.QDRANT_CLIENT }}
           VECTOR_COLLECTION=${{ secrets.VECTOR_COLLECTION }}
           MODEL_PATH=${{ secrets.MODEL_PATH }}
