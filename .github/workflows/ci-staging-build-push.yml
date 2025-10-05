@@ -4,7 +4,8 @@ on:
   push:
     branches: [ staging ]
   pull_request:
-    branches: [ staging ]
+    types: [opened, synchronize, reopened, closed]
+    branches: [staging]
 
 env:
   DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
@@ -38,6 +39,7 @@ jobs:
     outputs:
       validation-status: ${{ steps.validate-container.outcome }}
       image-tag: ${{ steps.set-image-tag.outputs.image-tag }}
+      docker-pushed: ${{ steps.deployment-trigger.outputs.docker_pushed }}
 
     steps:
     - name: Checkout repository
@@ -47,6 +49,7 @@ jobs:
       uses: docker/setup-buildx-action@v3
      
     - name: Login to Docker Hub
+      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_HUB_USERNAME }}
@@ -223,7 +226,7 @@ jobs:
         rm -f docker-compose.ci.yml
 
     - name: Push to Docker Hub
-      if: github.event_name == 'push' && steps.validate-container.outcome == 'success'
+      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && steps.validate.outcome == 'success'
       run: |
         echo "=== Pushing validated Assistant image to Docker Hub ==="
         IMAGE_TAG="${{ steps.set-image-tag.outputs.image-tag }}"
@@ -234,6 +237,12 @@ jobs:
         echo "[SUCCESS] Image pushed successfully to Docker Hub"
         echo "Image: $IMAGE_TAG"
 
+    - name: Set deployment trigger
+      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && steps.validate.outcome == 'success'
+      id: deployment-trigger
+      run: |
+        echo "docker_pushed=true" >> $GITHUB_OUTPUT
+
     - name: Cleanup Docker system
       if: always()
       run: |
@@ -242,6 +251,16 @@ jobs:
         docker system prune -f
         echo "=== Disk space after cleanup ==="
         df -h
+
+    - name: Trigger CD workflow via Repository Dispatch
+      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && steps.validate.outcome == 'success'
+      run: |
+        curl -L -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          https://api.github.com/repos/${{ github.repository }}/dispatches \
+          -d '{"event_type":"deploy-staging","client_payload":{"image_tag":"${{ steps.set-tag.outputs.tag }}"}}'
+        echo "[success:] CD workflow triggered successfully!"
 
   validation-summary:
     runs-on: ubuntu-latest
