@@ -34,16 +34,18 @@ jobs:
           FLASK_PORT=${{ secrets.FLASK_PORT }}
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY=${{secrets.OPENAI_API_KEY}}
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
           REDIS_URL=${{ secrets.REDIS_URL }}
+          REDIS_HOST=${{ secrets.REDIS_HOST }}
+          REDIS_PORT=${{ secrets.REDIS_PORT }}
           MONGODB_HOST=${{ secrets.MONGODB_HOST }}
           MONGODB_PORT=${{ secrets.MONGODB_PORT }}
           MONGO_USERNAME=${{ secrets.MONGO_USERNAME }}
           MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD }}
           MONGO_DATABASE=${{ secrets.MONGO_DATABASE }}
           MONGO_URL="mongodb://${{ secrets.MONGO_USERNAME }}:${{ secrets.MONGO_PASSWORD }}@${{ secrets.MONGODB_HOST }}:${{ secrets.MONGODB_PORT }}/
-          QDRANT_HOST=${{ secrets.QDRANT_HOST }}
-          QDRANT_PORT=${{ secrets.QDRANT_PORT }}
+          QDRANT_CLIENT=${{ secrets.QDRANT_CLIENT }}
+          VECTOR_COLLECTION=${{ secrets.VECTOR_COLLECTION }}
           MODEL_PATH=${{ secrets.MODEL_PATH }}
           EOF
           echo "Created .env file in AI Assistant service directory"
