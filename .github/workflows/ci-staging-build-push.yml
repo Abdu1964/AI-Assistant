@@ -103,17 +103,20 @@ jobs:
               ADVANCED_LLM_PROVIDER: gemini
               ADVANCED_LLM_VERSION: gemini-pro
               FLASK_PORT: 5002
-              JWT_SECRET: JWT_SECRET
-              GEMINI_API_KEY: dummy-key-for-testing
+              JWT_SECRET: test-jwt-secret-for-ci
+              GEMINI_API_KEY: dummy-gemini-key-for-testing
+              OPENAI_API_KEY: dummy-openai-key-for-testing
               REDIS_URL: redis://redis:6379/0
+              REDIS_HOST: redis
+              REDIS_PORT: 6379
               MONGODB_HOST: mongodb
               MONGODB_PORT: 27017
               MONGO_USERNAME: test
               MONGO_PASSWORD: test
               MONGO_DATABASE: test
-              MONGO_URL: mongodb://test:test@mongodb:27017/test
-              QDRANT_HOST: qdrant
-              QDRANT_PORT: 6333
+              MONGO_URL: "mongodb://test:test@mongodb:27017/test?authSource=admin"
+              QDRANT_CLIENT: http://qdrant:6333
+              VECTOR_COLLECTION: SITE
               MODEL_PATH: ./models
 
           qdrant:
@@ -142,8 +145,8 @@ jobs:
         docker compose -f docker-compose.ci.yml up -d
         
         # Wait a bit for startup
-        echo "=== Waiting 10 seconds for services to initialize ==="
-        sleep 10
+        echo "=== Waiting 70 seconds for services to initialize ==="
+        sleep 70
         
         # Step 2: Check docker ps to see all container status
         echo "=== Step 2: Checking 'docker ps -a' for all containers ==="
@@ -173,7 +176,7 @@ jobs:
           # ALWAYS get logs - whether running or exited
           echo ""
           echo "=== DIRECT DOCKER LOGS: docker logs $CONTAINER_NAME ==="
-          docker logs $CONTAINER_NAME --tail 100 || echo "Could not get logs"
+          docker logs $CONTAINER_NAME --tail 700 || echo "Could not get logs"
           
           # If container is exited, try to restart it and get new logs
           if [[ "$CONTAINER_STATUS" == "exited" ]]; then
@@ -194,14 +197,19 @@ jobs:
         echo ""
         echo "=== Step 4: DOCKER COMPOSE LOGS CHECK ==="
         docker compose -f docker-compose.ci.yml logs assistant --tail 50 || echo "Could not get compose logs"
+
+        # DEBUG: Test MongoDB connection
+        echo ""
+        echo "=== DEBUG: Testing MongoDB Connection ==="
+        docker compose -f docker-compose.ci.yml exec -T mongodb mongosh -u test -p test --authenticationDatabase admin --eval "db.runCommand({ping: 1})" test || echo "MongoDB connection test failed"
         
-        # Step 5: Final validation decision
+                # Step 5: Final validation decision
         echo ""
         echo "=== Step 5: Final Validation Result ==="
         
         # Check infrastructure services are running
         INFRA_RUNNING=true
-        for service in qdrant redis mongodb; do
+        for service in qdrant redis mongodb assistant; do
           if docker compose -f docker-compose.ci.yml ps $service | grep -q "Up"; then
             echo "[SUCCESS] $service is running"
           else
@@ -210,13 +218,43 @@ jobs:
           fi
         done
         
-        if [[ "$INFRA_RUNNING" == "true" ]]; then
-          echo "[SUCCESS] Infrastructure services are running correctly"
+        # Check application health
+        APP_HEALTHY=true
+        echo "=== Checking application health ==="
+        
+        # Check for critical errors in logs
+        if docker compose -f docker-compose.ci.yml logs assistant | grep -q "Authentication failed"; then
+          echo "[ERROR] MongoDB authentication failed"
+          APP_HEALTHY=false
+        fi
+        
+        if docker compose -f docker-compose.ci.yml logs assistant | grep -q "Error creating MongoDB indexes"; then
+          echo "[ERROR] MongoDB index creation failed"
+          APP_HEALTHY=false
+        fi
+        
+        if docker compose -f docker-compose.ci.yml logs assistant | grep -q "No address found"; then
+          echo "[ERROR] Qdrant connection failed"
+          APP_HEALTHY=false
+        fi
+        
+        # Check if application responds to health endpoint
+        echo "=== Testing application response ==="
+        if curl -f http://localhost:5003/health 2>/dev/null || \
+           curl -f http://localhost:5003/ 2>/dev/null; then
+          echo "[SUCCESS] Application is responding"
+        else
+          echo "[ERROR] Application is NOT responding"
+          APP_HEALTHY=false
+        fi
+        
+        if [[ "$INFRA_RUNNING" == "true" && "$APP_HEALTHY" == "true" ]]; then
+          echo "[SUCCESS] All services are running and application is healthy"
           echo ""
           echo "*** VALIDATION PASSED - Continuing pipeline"
           echo "*** Image will be pushed to Docker Hub"
         else
-          echo "[ERROR] CRITICAL: Infrastructure services are not running"
+          echo "[ERROR] CRITICAL: Validation failed - application is not working properly"
           exit 1
         fi
 
