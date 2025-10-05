@@ -25,8 +25,8 @@ jobs:
 
       - name: Create .env file for AI Assistant
         run: |
-          mkdir -p $HOME/services/ai-assistant
-          cat > $HOME/services/ai-assistant/.env << EOF
+          mkdir -p $HOME/services/AI-Assistant
+          cat > $HOME/services/AI-Assistant/.env << EOF
           BASIC_LLM_PROVIDER=${{ secrets.BASIC_LLM_PROVIDER }}
           BASIC_LLM_VERSION=${{ secrets.BASIC_LLM_VERSION }}
           ADVANCED_LLM_PROVIDER=${{ secrets.ADVANCED_LLM_PROVIDER }}
@@ -41,7 +41,7 @@ jobs:
           MONGO_USERNAME=${{ secrets.MONGO_USERNAME }}
           MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD }}
           MONGO_DATABASE=${{ secrets.MONGO_DATABASE }}
-          MONGO_URL="mongodb://${{ secrets.MONGO_USERNAME }}:${{ secrets.MONGO_PASSWORD }}@${{ secrets.MONGODB_HOST }}:${{ secrets.MONGODB_PORT }}/${{ secrets.MONGO_DATABASE }}"
+          MONGO_URL="mongodb://${{ secrets.MONGO_USERNAME }}:${{ secrets.MONGO_PASSWORD }}@${{ secrets.MONGODB_HOST }}:${{ secrets.MONGODB_PORT }}/
           QDRANT_HOST=${{ secrets.QDRANT_HOST }}
           QDRANT_PORT=${{ secrets.QDRANT_PORT }}
           MODEL_PATH=${{ secrets.MODEL_PATH }}
