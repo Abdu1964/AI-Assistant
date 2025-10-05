@@ -1,0 +1,111 @@
+name: CD - pull Docker image & build with ansible
+
+on:
+  repository_dispatch:
+    types: [deploy-staging]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Debug workflow info
+        run: |
+          echo "Event Type: ${{ github.event.action }}"
+          echo "Image Tag: ${{ github.event.client_payload.image_tag }}"
+          echo "Triggered by: ${{ github.actor }}"
+          
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+        
+      - name: Checkout Ansible repository
+        uses: actions/checkout@v4
+        with:
+          repository: abdu1964/ansible-deploy_v2.0
+          path: ansible-deploy_v2.0
+
+      - name: Create .env file for AI Assistant
+        run: |
+          mkdir -p $HOME/services/ai-assistant
+          cat > $HOME/services/ai-assistant/.env << EOF
+          BASIC_LLM_PROVIDER=${{ secrets.BASIC_LLM_PROVIDER }}
+          BASIC_LLM_VERSION=${{ secrets.BASIC_LLM_VERSION }}
+          ADVANCED_LLM_PROVIDER=${{ secrets.ADVANCED_LLM_PROVIDER }}
+          ADVANCED_LLM_VERSION=${{ secrets.ADVANCED_LLM_VERSION }}
+          FLASK_PORT=${{ secrets.FLASK_PORT }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY=${{secrets.OPENAI_API_KEY}}
+          REDIS_URL=${{ secrets.REDIS_URL }}
+          MONGODB_HOST=${{ secrets.MONGODB_HOST }}
+          MONGODB_PORT=${{ secrets.MONGODB_PORT }}
+          MONGO_USERNAME=${{ secrets.MONGO_USERNAME }}
+          MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD }}
+          MONGO_DATABASE=${{ secrets.MONGO_DATABASE }}
+          MONGO_URL="mongodb://${{ secrets.MONGO_USERNAME }}:${{ secrets.MONGO_PASSWORD }}@${{ secrets.MONGODB_HOST }}:${{ secrets.MONGODB_PORT }}/${{ secrets.MONGO_DATABASE }}"
+          QDRANT_HOST=${{ secrets.QDRANT_HOST }}
+          QDRANT_PORT=${{ secrets.QDRANT_PORT }}
+          MODEL_PATH=${{ secrets.MODEL_PATH }}
+          EOF
+          echo "Created .env file in AI Assistant service directory"
+
+          
+      - name: Create dynamic inventory
+        run: |
+          cd ansible-deploy_v2.0
+          mkdir -p inventory
+          CURRENT_USER=$(whoami)
+          USER_HOME=$HOME
+          cat > inventory/hosts.ini <<EOL
+          [AI_Assistant_Staging]
+          localhost ansible_connection=local ansible_user=$CURRENT_USER ansible_become=false ansible_user_dir=$USER_HOME
+          EOL
+          echo "Inventory created for user: $CURRENT_USER"
+          
+      - name: Create dynamic playbook
+        run: |
+          cd ansible-deploy_v2.0
+          mkdir -p playbooks
+          cat > playbooks/deploy_server.yml <<EOL
+          ---
+          # deploy_AI_Assistant
+          - name: Deploy AI_Assistant Service
+            hosts: AI_Assistant_Staging
+            tags: AI_Assistant_Staging
+            become: false
+            tasks:
+              - include_role:
+                  name: AI_Assistant
+                  tasks_from: staging-production-deploy.yml
+
+          EOL
+          echo "Playbook created"
+          
+      - name: Ansible configuration
+        run: |
+          cd ansible-deploy_v2.0
+          cat > ansible.cfg <<EOL
+          [defaults]
+          interpreter_python = /usr/bin/python3
+          host_key_checking = False
+          inventory = inventory/hosts.ini
+          become = false
+          remote_user = $(whoami)
+          [privilege_escalation]
+          become = false
+          become_method = sudo
+          become_user = root
+          become_ask_pass = false
+          EOL
+          
+      - name: Deploy AI Assistant to Staging with Ansible
+        run: |
+          cd ansible-deploy_v2.0
+          echo "Running as user: $(whoami)"
+          echo "Home directory: $HOME"
+          ansible-playbook -i inventory/hosts.ini playbooks/deploy_server.yml \
+            --tags "AI_Assistant_Staging" \
+            -e "install_dir=$HOME/services/AI_Assistant" \
+            -e "ansible_user_id=$(whoami)" \
+            -e "ansible_user_dir=$HOME" \
+            -e "ai_assistant_environment=staging" \
+            -v
