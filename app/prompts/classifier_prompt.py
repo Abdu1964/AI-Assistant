@@ -1,5 +1,4 @@
-
-answer_from_graph ="""
+answer_from_graph = """
             You are an assistant that answers questions about biological graphs. 
             Answer the question ONLY if it can be answered from the provided graph summary.
             
@@ -10,7 +9,7 @@ answer_from_graph ="""
             If not, respond with exactly: "I couldn't answer this from the given graph."
             """
 
-classifier_prompt ="""
+classifier_prompt = """
 You are an intelligent system that first classifies if a user's query is related to a specific biological graph/network, and then answers related queries directly.
 
 INPUT:
@@ -73,3 +72,17 @@ Example 3 (RELATED - general explanation request):
 - Output: "related: BTBD3 network showing basic connectivity with two source nodes on chromosome 20."
 """
 
+main_classifier_prompt = """
+Classify this query into one of these categories:
+- annotation_biological: Requests for specific biological entities (genes, proteins, exons, variants) and their relationships
+- annotation_general: Requests for database statistics, counts, overviews, "how many", "what types", general database information
+- hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
+- galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
+- rag: General information requests, including queries about uploaded PDFs, web content, or document profiles
+
+User query: {query}
+Content summaries: {content_summaries}
+{web_context}
+
+Respond ONLY with the category name.
+"""
