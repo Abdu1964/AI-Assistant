@@ -9,7 +9,11 @@ from .annotation_graph.schema_handler import SchemaHandler
 from .rag.rag import RAG
 from .rag.utils.web_search import SimpleWebSearch
 from .prompts.conversation_handler import conversation_prompt
-from .prompts.classifier_prompt import classifier_prompt, answer_from_graph
+from .prompts.classifier_prompt import (
+    classifier_prompt,
+    answer_from_graph,
+    main_classifier_prompt,
+)
 from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
 from .storage.history_manager import HistoryManager
@@ -95,6 +99,18 @@ class AiAssistance:
         logger.info("Creating LangGraph workflow with tools and nodes")
 
         # Define tools
+        # @tool
+        # def get_json_format(query: str, token: str) -> str:
+        #     """Retrieve the json format provided from the annotation graph tool"""
+        #     logger.info(f"get_json_format called with query: {query}")
+        #     try:
+        #         logger.info(f"Generating graph with arguments: {query}")
+        #         response = self.annotation_graph.validated_json(query)
+        #         return response
+        #     except Exception as e:
+        #         logger.error("Error in generating graph", exc_info=True)
+        #         return f"I couldn't generate a graph for the given question {query} please try again."
+
         @tool
         def get_general_response(query: str, user_id: str) -> str:
             """Retrieve information for general knowledge queries."""
@@ -160,7 +176,8 @@ class AiAssistance:
             "classifier",
             self._route_query,
             {
-                "annotation": "annotation_agent",
+                "annotation_biological": "annotation_agent",
+                "annotation_general": "annotation_agent",
                 "hypothesis": "hypothesis_agent",
                 "rag": "rag_agent",
                 "galaxy": "galaxy_agent",
@@ -229,20 +246,11 @@ class AiAssistance:
         web_context = f"Web context: {', '.join(web_urls)}" if web_urls else ""
 
         logger.info(f"Classifying query: {query}")
-        classifier_prompt = f"""Classify this query into one of these categories:
-        - annotation: Requests for factual information about genes, proteins, variants, or biological graphs/networks
-        - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
-        - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
-        - rag: General information requests, including queries about uploaded PDFs, web content, or document profiles (e.g., questions about content summaries, metadata, or content)
-        
-        User query: {query}
-        Content summaries: {content_summaries}
-        {web_context}
-        
-        Respond ONLY with the category name."
-        """
+        classifier_prompt_text = main_classifier_prompt.format(
+            query=query, content_summaries=content_summaries, web_context=web_context
+        )
 
-        response = self.advanced_llm.generate(classifier_prompt).lower()
+        response = self.advanced_llm.generate(classifier_prompt_text).lower()
         query_type = response.split()[0]  # Take first word in case LLM adds explanation
 
         logger.info(f"Query classified as: {query_type}")
@@ -260,18 +268,25 @@ class AiAssistance:
 
     def _annotation_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle annotation-related queries using internal pipeline"""
+        query_type = state.get("query_type", "annotation_biological")
         logger.info(
-            f"Annotation agent processing query: {state['user_query']} for user: {state['user_id']}"
+            f"Annotation agent processing query: {state['user_query']} for user: {state['user_id']}, type: {query_type}"
         )
         try:
-            emit_to_user(
-                user=state["user_id"], message="Processing your biological query..."
-            )
+            if query_type == "annotation_biological":
+                emit_to_user(
+                    user=state["user_id"], message="Processing your biological query..."
+                )
+            elif query_type == "annotation_general":
+                emit_to_user(
+                    user=state["user_id"], message="Analyzing database information..."
+                )
 
-            # Use the new internal annotation pipeline
+            # Use the new internal annotation pipeline with query type
             pipeline_response = self.annotation_graph.process_annotation_query(
                 query=state["user_query"],
                 user_id=state["user_id"],
+                query_type=query_type,
             )
 
             if pipeline_response.get("success", False):
