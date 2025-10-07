@@ -210,9 +210,12 @@ class Graph:
                 relationships = []
                 node_ids = set()
                 rel_ids = set()
+                data = {}  # Store scalar values for count queries
 
                 # Extract data from the result
+                records = []  # Store all records for multi-record queries
                 for record in result:
+                    record_data = {}
                     for key, value in record.items():
                         if hasattr(value, "labels"):  # This is a node
                             node_data = {
@@ -235,6 +238,13 @@ class Graph:
                             if str(value.id) not in rel_ids:
                                 relationships.append(rel_data)
                                 rel_ids.add(str(value.id))
+
+                        else:  # This is a scalar value (count, property, etc.)
+                            data[key] = value
+                            record_data[key] = value
+
+                    if record_data:
+                        records.append(record_data)
 
                 # Count results
                 counts = {
@@ -263,6 +273,8 @@ class Graph:
                         "nodes": nodes,
                         "relationships": relationships,
                         "counts": counts,
+                        "records": records,
+                        **data,
                     },
                     "error": None,
                     "cypher_query": cypher_query,
@@ -411,11 +423,37 @@ class Graph:
             relationship_summary=relationship_summary,
         )
 
-    def process_annotation_query(self, query, user_id):
+    def process_annotation_query(
+        self, query, user_id, query_type="annotation_biological"
+    ):
         # orchestrate the entire annotation pipeline from user query to final response
         try:
-            logger.info(f"Starting annotation pipeline for query: '{query}'")
+            logger.info(
+                f"Starting annotation pipeline for query: '{query}', type: {query_type}"
+            )
 
+            # Route based on query type
+            if query_type == "annotation_general":
+                return self._handle_general_query(query, user_id)
+            else:
+                return self._handle_biological_query(query, user_id)
+
+        except Exception as e:
+            error_msg = f"Unexpected error in annotation pipeline: {str(e)}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "pipeline_status": {
+                    "json_extraction": "unknown",
+                    "cypher_conversion": "unknown",
+                    "database_execution": "unknown",
+                    "summarization": "unknown",
+                },
+            }
+
+    def _handle_biological_query(self, query, user_id):
+        try:
             # Extract and validate JSON query
             emit_to_user(
                 user=user_id,
@@ -559,7 +597,7 @@ class Graph:
             }
 
         except Exception as e:
-            error_msg = f"Unexpected error in annotation pipeline: {str(e)}"
+            error_msg = f"Unexpected error in biological query pipeline: {str(e)}"
             logger.error(error_msg)
             return {
                 "success": False,
@@ -571,3 +609,103 @@ class Graph:
                     "summarization": "unknown",
                 },
             }
+
+    def _handle_general_query(self, query, user_id):
+        try:
+            logger.info(f"Handling general query: '{query}'")
+
+            emit_to_user(
+                user=user_id,
+                message="Analyzing database information...",
+            )
+
+            # Generate simple database summary
+            database_summary = self._generate_database_summary()
+
+            # Use LLM to answer the query based on the summary
+            summary_prompt = f"""
+            Based on this database summary: {database_summary}
+            
+            Answer this question: {query}
+            
+            Provide a clear, informative response based on the available data.
+            """
+
+            summary = self.llm.generate(summary_prompt)
+            logger.info("General query answered successfully")
+
+            return {
+                "success": True,
+                "summary": summary,
+                "cypher_query": None,
+                "json_query": None,
+                "database_results": {"data": {"summary": database_summary}},
+                "error": None,
+                "pipeline_status": {
+                    "general_query_handling": "success",
+                },
+            }
+
+        except Exception as e:
+            error_msg = f"Error handling general query: {str(e)}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg,
+                "pipeline_status": {
+                    "general_query_handling": "failed",
+                },
+            }
+
+    def _generate_database_summary(self):
+        try:
+            stats_queries = {
+                "total_nodes": "MATCH (n) RETURN count(n) as total_nodes",
+                "total_relationships": "MATCH ()-[r]->() RETURN count(r) as total_relationships",
+                "node_types": "MATCH (n) RETURN DISTINCT labels(n)[0] as node_type, count(n) as count ORDER BY count DESC",
+                "relationship_types": "MATCH ()-[r]->() RETURN DISTINCT type(r) as rel_type, count(r) as count ORDER BY count DESC",
+            }
+
+            summary_parts = []
+
+            for key, query in stats_queries.items():
+                try:
+                    result = self.execute_cypher_query(query)
+                    if result.get("success"):
+                        data = result.get("data", {})
+                        value = data.get(key)
+                        records = data.get("records", [])
+
+                        if value is not None:
+                            # Single value (like count queries)
+                            summary_parts.append(f"{key}: {value}")
+                        elif records:
+                            # Multiple records (like node types, relationship types)
+                            if key == "node_types":
+                                node_types = [
+                                    f"{record.get('node_type', 'unknown')} ({record.get('count', 0)})"
+                                    for record in records
+                                ]
+                                summary_parts.append(f"{key}: {', '.join(node_types)}")
+                            elif key == "relationship_types":
+                                rel_types = [
+                                    f"{record.get('rel_type', 'unknown')} ({record.get('count', 0)})"
+                                    for record in records
+                                ]
+                                summary_parts.append(f"{key}: {', '.join(rel_types)}")
+                            else:
+                                summary_parts.append(f"{key}: {records}")
+                        else:
+                            summary_parts.append(f"{key}: No data found")
+                    else:
+                        summary_parts.append(f"{key}: Unable to retrieve")
+
+                except Exception as e:
+                    logger.warning(f"Failed to execute {key} query: {e}")
+                    summary_parts.append(f"{key}: Error retrieving")
+
+            return "Database Summary:\n" + "\n".join(summary_parts)
+
+        except Exception as e:
+            logger.error(f"Failed to generate database summary: {e}")
+            return "Database Summary:\nUnable to retrieve database information due to an error."
