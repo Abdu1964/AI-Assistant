@@ -37,6 +37,104 @@ class Graph:
             password=os.getenv("NEO4J_PASSWORD"),
         )
 
+    def query_knowledge_graph(self, json_query, token):
+        """
+        Query the knowledge graph service.
+
+        Args:
+            json_query (dict): The JSON query to be sent.
+
+        Returns:
+            dict: The JSON response from the knowledge graph service or an error message.
+        """
+        if isinstance(json_query, str):
+            logger.info("passed json is a string changing it to a dicitionary")
+            json_query = json.loads(json_query)
+
+        logger.info("Starting knowledge graph query...")
+        source = "ai-assistant"
+        limit = 100
+
+        params = {"source": source, "limit": limit, "properties": True}
+        payload = {"requests": json_query}
+
+        try:
+            logger.debug(
+                f"Sending request to {self.kg_service_url} with payload: {payload}"
+            )
+            response = requests.post(
+                self.kg_service_url + "/query",
+                json=payload,
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            json_response = response.json()
+            # logger.info(f"Successfully queried the knowledge graph. 'nodes count': {len(json_response.get('nodes'))} 'edges count': {len(json_response.get('edges', []))}")
+            return response.json()
+        except requests.RequestException as e:
+            logger.error(f"Error querying knowledge graph: {e}")
+            if e.response is not None:
+                logger.error(f"Response content: {e.response.text}")
+            return {"error": f"Failed to query knowledge graph: {str(e)}"}
+
+    def validated_json(self, query, user_id):
+        logger.info(f"Starting annotation query processing for question: '{query}'")
+
+        # Extract relevant information
+        relevant_information = self._extract_relevant_information(query)
+
+        # Convert to initial JSON
+        emit_to_user(user=user_id, message=f"Validating Constructed Json Format...")
+        initial_json = self._convert_to_annotation_json(relevant_information, query)
+
+        # Validate and update
+        validation = self._validate_and_update(initial_json)
+
+        # If validation failed, return the intermediate steps
+        if validation["validation_report"]["validation_status"] == "failed":
+            logger.error("Validation is failing *****sending the intial json format")
+            return {
+                "text": None,
+                "json_format": initial_json,
+                "resource": {"id": None, "type": "annotation"},
+            }
+
+        # Use the updated JSON for subsequent steps
+        validated_json = validation["updated_json"]
+        # validated_json["question"] = query
+        """
+            TODO
+            add query along with job id to specifiy to what query is the json requested is related to.
+            """
+        return {
+            "text": None,
+            "json_format": validated_json,
+            "resource": {"id": None, "type": "annotation"},
+        }
+
+    def generate_graph(self, query, validated_json, token):
+        try:
+            graph = self.query_knowledge_graph(validated_json, token)
+
+            # Generate final answer using validated JSON
+            # final_answer = self._provide_text_response(query, validated_json, graph)
+            response = {
+                "text": graph["answer"],
+                "resource": {"id": graph["annotation_id"], "type": "annotation"},
+            }
+            # Store summary in Redis cache for 24 hours
+            # redis_manager.create_graph(graph_id=graph_id, graph_summary=summary_text)
+
+            logger.info("Completed query processing.")
+            return response
+
+        except Exception as e:
+            logger.error(f"An error occurred during graph generation: {e}")
+            return {
+                "text": f"I apologize, but I wasn't able to generate the graph you requested. Could you please rephrase your question or provide additional details so I can better understand what you're looking for?"
+            }
+
     def _extract_relevant_information(self, query):
         try:
             logger.info("Extracting relevant information from the query.")
