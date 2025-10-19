@@ -74,8 +74,8 @@ Example 3 (RELATED - general explanation request):
 
 main_classifier_prompt = """
 Classify this query into one of these categories:
-- annotation_biological: Requests for specific biological entities (genes, proteins, exons, variants) and their relationships
-- annotation_general: Requests for database statistics, counts, overviews, "how many", "what types", general database information
+- annotation_biological: Requests to find, retrieve, or explore specific biological entities and their relationships (e.g., "find gene BRCA1", "show transcripts for TP53", "what exons does IGF1 have")
+- annotation_general: Requests for aggregate statistics, counts, or metadata about the database itself (e.g., "how many", "what types", "database statistics", "total count")
 - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
 - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
 - rag: General information requests, including queries about uploaded PDFs, web content, or document profiles
