@@ -7,9 +7,9 @@ This is the backend API for the RejuveBio Platform AI Assistant.
 Before you begin, ensure you have the following installed:
 
 * **Python 3.8+**
-* **Poetry** (for managing dependencies)
+* **Poetry** (for managing dependencies when installing locally)
 
-## Installation
+## Installation Using Docker to run the application
 
 ### 1. Clone the repository
 First, clone the repository and navigate to the project folder:
@@ -18,6 +18,46 @@ First, clone the repository and navigate to the project folder:
 git clone https://github.com/rejuve-bio/AI-Assistant.git
 cd AI-Assistant
 ```
+
+### 2. Setting up .env files
+
+Ensure that the environment variables are set correctly in `.env` before running the application:
+
+* **LLM Model Configuration:**
+  * `BASIC_LLM_PROVIDER`: Choose the provider for lighter tasks (openai or gemini).
+  * `BASIC_LLM_VERSION`: Version for the basic model (gpt-3.5-turbo, gemini-lite, etc.).
+  * `ADVANCED_LLM_PROVIDER`: Choose the provider for advanced tasks (openai or gemini).
+  * `ADVANCED_LLM_VERSION`: Version for the advanced model (gpt-4o, gemini-pro, etc.).
+* **API Keys:**
+  * `OPENAI_API_KEY`: Your OpenAI API key.
+  * `GEMINI_API_KEY`: Your Gemini API key.
+* **Neo4j Configuration:**
+  * `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`: Connection details for the Neo4j database.
+* **Annotation Service Configuration:**
+  * `ANNOTATION_AUTH_TOKEN`: Authentication token for the annotation service.
+  * `ANNOTATION_SERVICE_URL`: The URL for the annotation service, which processes queries.
+
+
+### 3. Start the application:
+
+```bash
+docker-compose up --build
+```
+
+**Example using curl:**
+```bash
+curl -X POST http://localhost:5002/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "your query here"}'
+```
+
+### 2. To stop the services, use:
+  ```bash
+  docker-compose down
+  ```
+
+
+## Installation Using Docker to run the application
 
 ### 2. Install dependencies using Poetry
 Install the required dependencies for the project:
@@ -30,7 +70,7 @@ poetry install
 Activate the Poetry-managed virtual environment:
 
 ```bash
-poetry shell
+poetry env activate
 ```
 
 ## 4. Configuration
@@ -65,23 +105,30 @@ Ensure that the environment variables are set correctly in `.env` before running
 
 ## Usage
 
-Once your environment is configured, you can run the Flask server and use the AI Assistant API.
+Once your environment is configured, setup other images we use from docker hub .
 
 make sure you set up qdrant local client :
 ```bash
+# Run Qdrant locally
 docker run -d \
     -p 6333:6333 \
-    -v qdrant_data:/qdrant/storage qdrant/qdrant
-```
+    -v qdrant_data:/qdrant/storage \
+    qdrant/qdrant
 
-### Authentication
-First, generate and copy your authentication token:
-```bash
-python helper/access_token_generator.py
+# Run Redis locally
+docker run -d \
+    -p 6379:6379 \
+    redis:6-alpine
+
+# Run MongoDB locally
+docker run -d \
+    -p 27017:27017 \
+    -e MONGO_INITDB_ROOT_USERNAME=admin_user \
+    -e MONGO_INITDB_ROOT_PASSWORD=secure_password \
+    -e MONGO_INITDB_DATABASE=app_database \
+    -v mongodb_data:/data/db \
+    mongo:6.0
 ```
-Use this token in your API requests:
-- For Postman: Add header `Authorization: Bearer your_token_here`
-- For cURL: Add `-H "Authorization: Bearer your_token_here"`
 
 ### 1. Start the Flask Server
 Run the Flask server with the following command:
@@ -91,7 +138,17 @@ python run.py
 ```
 This will start the server at http://localhost:5002.
 
+
 ### 2. Send a POST request to the `/query` endpoint
+### Authentication
+First, generate and copy your authentication token:
+```bash
+python helper/access_token_generator.py
+```
+Use this token in your API requests:
+- For Postman: Add header `Authorization: Bearer your_token_here`
+- For cURL: Add `-H "Authorization: Bearer your_token_here"`
+
 You can send a POST request to the `/query` endpoint to interact with the AI Assistant.
 
 **Example using curl:**
@@ -120,56 +177,3 @@ A JSON object containing the processed results from the AI assistant, based on t
 * Google for the Gemini models.
 * Neo4j for the graph database technology.
 * Flask for the lightweight web framework.
-
-
-## Using Docker to run the application
-
-## Installation
-
-### 1. Clone the repository
-First, clone the repository and navigate to the project folder:
-
-```bash
-git clone [https://github.com/rejuve-bio/AI-Assistant.git](https://github.com/rejuve-bio/AI-Assistant.git)
-cd ai-assistant
-```
-
-### 2. Setting up .env files
-
-Ensure that the environment variables are set correctly in `.env` before running the application:
-
-* **LLM Model Configuration:**
-  * `BASIC_LLM_PROVIDER`: Choose the provider for lighter tasks (openai or gemini).
-  * `BASIC_LLM_VERSION`: Version for the basic model (gpt-3.5-turbo, gemini-lite, etc.).
-  * `ADVANCED_LLM_PROVIDER`: Choose the provider for advanced tasks (openai or gemini).
-  * `ADVANCED_LLM_VERSION`: Version for the advanced model (gpt-4o, gemini-pro, etc.).
-* **API Keys:**
-  * `OPENAI_API_KEY`: Your OpenAI API key.
-  * `GEMINI_API_KEY`: Your Gemini API key.
-* **Neo4j Configuration:**
-  * `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`: Connection details for the Neo4j database.
-* **Annotation Service Configuration:**
-  * `ANNOTATION_AUTH_TOKEN`: Authentication token for the annotation service.
-  * `ANNOTATION_SERVICE_URL`: The URL for the annotation service, which processes queries.
-
-## Usage
-
-Once your environment is configured, you can run the app and use the AI Assistant API.
-
-### 1. Start the application:
-
-```bash
-docker-compose up --build
-```
-
-**Example using curl:**
-```bash
-curl -X POST http://localhost:5002/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "your query here"}'
-```
-
-### 2. To stop the services, use:
-  ```bash
-  docker-compose down
-  ```
