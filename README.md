@@ -56,24 +56,55 @@ curl -X POST http://localhost:5002/query \
   docker-compose down
   ```
 
+### 3. Send a POST request to the `/query` endpoint
+### Authentication
+First, generate and copy your authentication token. From the AI-Assistant project directory, run:
+```bash
+python helper/access_token_generator.py
+```
+Use this token in your API requests:
+- For Postman: Add header `Authorization: Bearer your_token_here`
+- For cURL: Add `-H "Authorization: Bearer your_token_here"`
 
-## Installation Using Docker to run the application
+You can send a POST request to the `/query` endpoint to interact with the AI Assistant.
 
-### 2. Install dependencies using Poetry
+**Example using curl:**
+
+```bash
+curl -X POST http://localhost:5002/query \
+  -H "Authorization: Bearer your_token_here" \
+  -F "query=What enhancers are involved in the formation of the protein P78504?"
+```
+
+**Request Body:**
+
+A form-data field:
+```json
+  query  =  Your natural language query here
+```
+
+**Response:**
+
+A JSON object containing the processed results from the AI assistant, based on the model's analysis.
+
+
+## Installation Locally to run the application
+
+### 1. Install dependencies using Poetry
 Install the required dependencies for the project:
 
 ```bash
 poetry install
 ```
 
-### 3. Activate the virtual environment
+### 2. Activate the virtual environment
 Activate the Poetry-managed virtual environment:
 
 ```bash
 poetry env activate
 ```
 
-## 4. Configuration
+## 3. Configuration
 The application uses environment variables to set up its parameters.
 
 **Environment Variables**
@@ -103,7 +134,7 @@ Ensure that the environment variables are set correctly in `.env` before running
 * **Qdrant configuration:**
   * `QDRANT_CLIENT`: Port for qdrant client(http://localhost:6333)
 
-## Usage
+## 4. Pulling images used from docker hub
 
 Once your environment is configured, setup other images we use from docker hub .
 
@@ -130,7 +161,7 @@ docker run -d \
     mongo:6.0
 ```
 
-### 1. Start the Flask Server
+### 5. Start the Flask Server
 Run the Flask server with the following command:
 
 ```bash
@@ -139,7 +170,7 @@ python run.py
 This will start the server at http://localhost:5002.
 
 
-### 2. Send a POST request to the `/query` endpoint
+### 6. Send a POST request to the `/query` endpoint
 ### Authentication
 First, generate and copy your authentication token:
 ```bash
@@ -155,16 +186,15 @@ You can send a POST request to the `/query` endpoint to interact with the AI Ass
 
 ```bash
 curl -X POST http://localhost:5002/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What enhancers are involved in the formation of the protein p78504?"}'
+  -H "Authorization: Bearer your_token_here" \
+  -F "query=What enhancers are involved in the formation of the protein P78504?"
 ```
 
 **Request Body:**
 
+A form-data field:
 ```json
-{
-  "query": "Your natural language query here"
-}
+  query  =  Your natural language query here
 ```
 
 **Response:**
