@@ -193,9 +193,8 @@ curl -X POST http://localhost:5002/query \
 **Request Body:**
 
 A form-data field:
-```bash
-  query  =  "Your natural language query here"
-```
+
+query  =  "Your natural language query here"
 
 **Response:**
 
