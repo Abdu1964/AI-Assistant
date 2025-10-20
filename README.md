@@ -1,4 +1,4 @@
-# AI Assistant Backend API
+# AI Assistant Backend API.
 
 This is the backend API for the RejuveBio Platform AI Assistant.
 
