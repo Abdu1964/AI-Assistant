@@ -173,7 +173,7 @@ class Qdrant:
 
                     # Create payload with the item data and source info
                     payload = {
-                        "text": text,
+                        # "text": text,
                         "source": "sample_data",
                         **item,
                     }
