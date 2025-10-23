@@ -5,6 +5,7 @@ from pymongo import MongoClient
 import uuid
 import logging
 
+logging.getLogger("pymongo").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
