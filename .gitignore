@@ -11,3 +11,4 @@ data
 test.py
 rag_user_pdf.json
 *.lock
+storage
