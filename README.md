@@ -36,7 +36,17 @@ Ensure that the environment variables are set correctly in `.env` before running
 * **Annotation Service Configuration:**
   * `ANNOTATION_AUTH_TOKEN`: Authentication token for the annotation service.
   * `ANNOTATION_SERVICE_URL`: The URL for the annotation service, which processes queries.
-
+* **Redis configuration:**
+  * REDIS_URL: URL to connect to Redis (e.g., redis://<REDIS_HOST>:<REDIS_PORT>/0)
+  * REDIS_HOST: Redis host (e.g., localhost)
+  * REDIS_PORT: Redis port (e.g., 6379)
+* **Qdrant configuration:**
+  * `QDRANT_CLIENT`: qdrant Port
+* **MongoDB configuration:**
+  * MONGO_USERNAME: MongoDB username
+  * MONGO_PASSWORD: MongoDB password
+  * MONGO_DATABASE: MongoDB database name
+  * MONGO_URL: MongoDB connection URL (e.g., mongodb://<MONGO_USERNAME>:<MONGO_PASSWORD>@<MONGO_HOST>:<MONGO_PORT>/)
 
 ### 3. Start the application:
 
@@ -133,6 +143,16 @@ Ensure that the environment variables are set correctly in `.env` before running
   * `FLASK_PORT`: Port for the Flask server (default: 5002).
 * **Qdrant configuration:**
   * `QDRANT_CLIENT`: Port for qdrant client(http://localhost:6333)
+* **Redis configuration:**
+  * REDIS_URL: URL to connect to Redis (e.g., redis://<REDIS_HOST>:<REDIS_PORT>/0)
+  * REDIS_HOST: Redis host (e.g., localhost)
+  * REDIS_PORT: Redis port (e.g., 6379)
+
+* **MongoDB configuration:**
+  * MONGO_USERNAME: MongoDB username
+  * MONGO_PASSWORD: MongoDB password
+  * MONGO_DATABASE: MongoDB database name
+  * MONGO_URL: MongoDB connection URL (e.g., mongodb://<MONGO_USERNAME>:<MONGO_PASSWORD>@<MONGO_HOST>:<MONGO_PORT>/)
 
 ## 4. Pulling images used from docker hub
 
