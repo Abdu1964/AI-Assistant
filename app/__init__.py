@@ -117,8 +117,26 @@ def create_app():
     )
     logger.info("ADVANCED LLM model initialized successfully")
 
-    embedding_model = sentence_transformer_embedding_model
-    vector_size = get_embedding_vector_size(embedding_model)
+    embedding = os.getenv("EMBEDDING_MODEL","sentence_transformer")
+    if embedding=="openai":
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            raise ValueError("OpenAI API key not found")
+        else:
+            embedding_model = openai_embedding_model
+            vector_size = get_embedding_vector_size(embedding_model)
+
+    elif embedding=="gemini":
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("OpenAI API key not found")
+        else:
+            embedding_model = gemini_embedding_model
+            vector_size = get_embedding_vector_size(embedding_model)
+    elif embedding =="sentence_transformer":
+        embedding_model = sentence_transformer_embedding_model
+        vector_size = get_embedding_vector_size(embedding_model)
+
     qdrant_client = Qdrant(embedding_model=embedding_model, vector_size=vector_size)
     app.config["qdrant_client"] = qdrant_client
     app.config["embedding_model"] = embedding_model
