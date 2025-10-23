@@ -128,10 +128,12 @@ class RAG:
             return_response = {"text": None, "resource": {}}
 
             # Check for duplicate files
+            logger.info("checking if user files is already saved")
             pdf_files = mongo_db_manager.get_user_content_files(user_id, "pdf")
             if any(f.get("filename") == file.filename for f in pdf_files):
                 return_response["text"] = "PDF already exists."
                 return_response["resource"]["filename"] = file.filename
+                logger.info("file is found from the mongodb data")
                 return return_response
 
             # Check quota
@@ -170,6 +172,7 @@ class RAG:
             full_text = self.content_processor.extract_text_from_pdf(pdf_path)
             analysis = self.content_analyzer.analyze_content(full_text, "pdf")
 
+            logger.info("Analyzing content for keywords, summary adn suggested questions")
             file_analysis = {
                 "content_id": content_id,
                 "filename": file.filename,
@@ -183,7 +186,7 @@ class RAG:
             }
 
             # Store in Qdrant using custom chunking logic
-            self.save_doc_to_rag(
+            saved = self.save_doc_to_rag(
                 data=None,
                 collection_name=user_id,
                 is_content=True,
@@ -192,21 +195,23 @@ class RAG:
                 user_id=user_id,
                 content_id=content_id,
             )
-
-            # Add PDF metadata to the database using unified table
-            mongo_db_manager.add_content_file(
-                user_id=user_id,
-                content_id=content_id,
-                content_type="pdf",
-                filename=file.filename,
-                num_pages=num_pages,
-                file_size=file_size,
-                upload_time=upload_time,
-                summary=analysis.get("summary"),
-                keywords=str(analysis.get("keywords", [])),
-                topics=str(analysis.get("topics", [])),
-                suggested_questions=str(analysis.get("suggested_questions", [])),
-            )
+            
+            if saved:
+                logger.info("content saved to Qdrant")
+                # Add PDF metadata to the database using unified table
+                mongo_db_manager.add_content_file(
+                    user_id=user_id,
+                    content_id=content_id,
+                    content_type="pdf",
+                    filename=file.filename,
+                    num_pages=num_pages,
+                    file_size=file_size,
+                    upload_time=upload_time,
+                    summary=analysis.get("summary"),
+                    keywords=str(analysis.get("keywords", [])),
+                    topics=str(analysis.get("topics", [])),
+                    suggested_questions=str(analysis.get("suggested_questions", [])),
+                )
 
             # Add memory for the upload
             MemoryManager(self.llm).add_memory(f"pdf file : {file.filename}", user_id)
@@ -281,7 +286,7 @@ class RAG:
             }
 
             # Store in Qdrant using custom chunking logic
-            self.save_doc_to_rag(
+            saved = self.save_doc_to_rag(
                 data=None,
                 collection_name=user_id,
                 is_web=True,
@@ -290,22 +295,24 @@ class RAG:
                 content_id=content_id,
             )
 
-            # Add web content metadata to the database
-            mongo_db_manager.add_content_file(
-                user_id=user_id,
-                content_id=content_id,
-                content_type="web",
-                url=url,
-                title=web_content["metadata"].get("title") or None,
-                author=web_content["metadata"].get("author") or None,
-                publish_date=None,
-                file_size=None,
-                upload_time=upload_time,
-                summary=analysis.get("summary"),
-                keywords=str(analysis.get("keywords", [])),
-                topics=str(analysis.get("topics", [])),
-                suggested_questions=str(analysis.get("suggested_questions", [])),
-            )
+            if saved:
+                logger.info("content saved to Qdrant")
+                # Add web content metadata to the database
+                mongo_db_manager.add_content_file(
+                    user_id=user_id,
+                    content_id=content_id,
+                    content_type="web",
+                    url=url,
+                    title=web_content["metadata"].get("title") or None,
+                    author=web_content["metadata"].get("author") or None,
+                    publish_date=None,
+                    file_size=None,
+                    upload_time=upload_time,
+                    summary=analysis.get("summary"),
+                    keywords=str(analysis.get("keywords", [])),
+                    topics=str(analysis.get("topics", [])),
+                    suggested_questions=str(analysis.get("suggested_questions", [])),
+                )
 
             # Add memory for the upload
             MemoryManager(self.llm).add_memory(f"web content : {url}", user_id)
