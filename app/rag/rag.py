@@ -34,8 +34,8 @@ class RAG:
         """
         self.llm = llm
         self.client = qdrant_client
+        self.content_processor = ContentProcessor()
         self.content_analyzer = ContentAnalyzer(self.llm)
-        self.content_analyzer = ContentAnalyzer()
         logger.info(
             "RAG initialized with LLM and shared Qdrant client/embedding model."
         )
