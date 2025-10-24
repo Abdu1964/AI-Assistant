@@ -30,7 +30,7 @@ jobs:
       MONGO_USERNAME: ${{ vars.MONGO_USERNAME }}
       MONGO_PASSWORD: ${{ vars.MONGO_PASSWORD }}
       MONGO_DATABASE: ${{ vars.MONGO_DATABASE }}
-      MONGO_URL: MONGO_URL: ${{ vars.MONGO_URL }}
+      MONGO_URL: ${{ vars.MONGO_URL }}
 
     services:
       redis:
