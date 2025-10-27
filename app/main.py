@@ -551,10 +551,7 @@ class AiAssistance:
                     query=query,
                     user_id=user_id,
                     context=None,
-                    graph_id_referenced=graph_id,
-                )
-                self.history.create_history(
-                    user_id, query, final_response, graph_id_referenced=graph_id
+                    graph_id_referenced=graph_summary,
                 )
                 emit_to_user(user=user_id, message=final_response, status="completed")
                 return {"text": final_response}
@@ -582,8 +579,7 @@ class AiAssistance:
 
                 response_resource = None
                 if resource_type:
-                    response_resource = f"successfully made {resource_type}"
-                    logger.info(f"Here is the resource {response_resource}")
+                    logger.info(f"Here is the resource successfully made {resource_type}")
 
                 emit_to_user(user=user_id, message=agent_response, status="completed")
                 assistant_answer = (
@@ -592,7 +588,7 @@ class AiAssistance:
                     else str(agent_response)
                 )
                 self.history.create_history(
-                    user_id, query, assistant_answer, graph_id_referenced=graph_id
+                    user_id, query, assistant_answer, graph_id_referenced=graph_summary
                 )
                 return agent_response
         else:
