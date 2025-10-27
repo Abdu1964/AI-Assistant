@@ -77,7 +77,7 @@ class AiAssistance:
         self.history = HistoryManager()
         self.store = mongo_db_manager
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
-        self.galaxy_handler = GalaxyHandler(advanced_llm)
+        self.galaxy_handler = GalaxyHandler(advanced_llm,qdrant_client,embedding_model)
         self.embedding_model = embedding_model
 
         logger.info(
@@ -120,30 +120,30 @@ class AiAssistance:
                 logger.error("Error in retrieving response", exc_info=True)
                 return "Error in retrieving response."
 
-        @tool
-        def hypothesis_generation(query: str, token: str) -> str:
-            """Generation of hypothesis for biological mechanisms"""
-            logger.info(f"hypothesis_generation called with query: {query}")
-            try:
-                logger.info(f"Here is the user query passed to the agent {query}")
-                response = self.hypothesis_generation.generate_hypothesis(
-                    token=token, user_query=query
-                )
-                return response
-            except Exception as e:
-                logger.error("Error in hypothesis generation", exc_info=True)
-                traceback.print_exc()
-                return "Error in generating hypothesis."
+        # @tool
+        # def hypothesis_generation(query: str, token: str) -> str:
+        #     """Generation of hypothesis for biological mechanisms"""
+        #     logger.info(f"hypothesis_generation called with query: {query}")
+        #     try:
+        #         logger.info(f"Here is the user query passed to the agent {query}")
+        #         response = self.hypothesis_generation.generate_hypothesis(
+        #             token=token, user_query=query
+        #         )
+        #         return response
+        #     except Exception as e:
+        #         logger.error("Error in hypothesis generation", exc_info=True)
+        #         traceback.print_exc()
+        #         return "Error in generating hypothesis."
 
         @tool
-        def get_galaxy_tools(query: str, user_id: str) -> str:
+        def get_galaxy_tools(query: str, user_id: str,token) -> str:
             """Retrieve information about Galaxy web tools and workflows."""
             logger.info(
                 f"get_galaxy_tools called with query: {query}, user_id: {user_id}"
             )
             try:
                 # You'll need to implement this method in your galaxy handler
-                response = self.galaxy_handler.get_galaxy_info(query, user_id)
+                response = self.galaxy_handler.get_galaxy_info(query, user_id,token)
                 return response
             except Exception as e:
                 logger.error("Error in galaxy tools retrieval", exc_info=True)
@@ -152,7 +152,7 @@ class AiAssistance:
         self.tools = [
             get_json_format,
             get_general_response,
-            hypothesis_generation,
+            # hypothesis_generation,
             get_galaxy_tools,
         ]
         # Create workflow
@@ -161,7 +161,7 @@ class AiAssistance:
         # Add nodes
         workflow.add_node("classifier", self._classify_query)
         workflow.add_node("annotation_agent", self._annotation_agent)
-        workflow.add_node("hypothesis_agent", self._hypothesis_agent)
+        # workflow.add_node("hypothesis_agent", self._hypothesis_agent)
         workflow.add_node("rag_agent", self._rag_agent)
         workflow.add_node("galaxy_agent", self._galaxy_agent)
         workflow.add_node("finalizer", self._finalize_response)
@@ -174,7 +174,7 @@ class AiAssistance:
             self._route_query,
             {
                 "annotation": "annotation_agent",
-                "hypothesis": "hypothesis_agent",
+                # "hypothesis": "hypothesis_agent",
                 "rag": "rag_agent",
                 "galaxy": "galaxy_agent",
                 "error": "finalizer",
@@ -182,7 +182,7 @@ class AiAssistance:
         )
 
         workflow.add_edge("annotation_agent", "finalizer")
-        workflow.add_edge("hypothesis_agent", "finalizer")
+        # workflow.add_edge("hypothesis_agent", "finalizer")
         workflow.add_edge("rag_agent", "finalizer")
         workflow.add_edge("galaxy_agent", "finalizer")
         workflow.add_edge("finalizer", END)
@@ -233,6 +233,7 @@ class AiAssistance:
     def _classify_query(self, state: AgentState) -> Dict[str, Any]:
         query = state["user_query"]
         user_id = state["user_id"]
+        token = state["token"]
         content_ids = state.get("content_ids")
 
         # Fetch content summaries using helper
@@ -244,8 +245,7 @@ class AiAssistance:
         logger.info(f"Classifying query: {query}")
         classifier_prompt = f"""Classify this query into one of these categories:
         - annotation: Requests for factual information about genes, proteins, variants, or biological graphs/networks
-        - hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
-        - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
+        - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities recommending of tools conversions 
         - rag: General information requests, including queries about uploaded PDFs, web content, or document profiles (e.g., questions about content summaries, metadata, or content)
         
         User query: {query}
@@ -301,32 +301,32 @@ class AiAssistance:
                 ],
             }
 
-    def _hypothesis_agent(self, state: AgentState) -> Dict[str, Any]:
-        """Handle hypothesis generation queries"""
-        logger.info(
-            f"Hypothesis agent processing query: {state['user_query']} for user: {state['user_id']}"
-        )
-        try:
-            emit_to_user(user=state["user_query"], message="Generating hypothesis...")
-            response = self.hypothesis_generation.generate_hypothesis(
-                token=state["token"],
-                user_query=state["user_query"],
-                user_id=state["user_id"],
-            )
+    # def _hypothesis_agent(self, state: AgentState) -> Dict[str, Any]:
+    #     """Handle hypothesis generation queries"""
+    #     logger.info(
+    #         f"Hypothesis agent processing query: {state['user_query']} for user: {state['user_id']}"
+    #     )
+    #     try:
+    #         emit_to_user(user=state["user_query"], message="Generating hypothesis...")
+    #         response = self.hypothesis_generation.generate_hypothesis(
+    #             token=state["token"],
+    #             user_query=state["user_query"],
+    #             user_id=state["user_id"],
+    #         )
 
-            return {
-                "response": response,
-                "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
-            }
-        except Exception as e:
-            logger.error("Error in hypothesis agent", exc_info=True)
-            return {
-                "response": f"Error generating hypothesis: {str(e)}",
-                "error": str(e),
-                "messages": [
-                    AIMessage(content=f"Error in hypothesis generation: {str(e)}")
-                ],
-            }
+    #         return {
+    #             "response": response,
+    #             "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
+    #         }
+    #     except Exception as e:
+    #         logger.error("Error in hypothesis agent", exc_info=True)
+    #         return {
+    #             "response": f"Error generating hypothesis: {str(e)}",
+    #             "error": str(e),
+    #             "messages": [
+    #                 AIMessage(content=f"Error in hypothesis generation: {str(e)}")
+    #             ],
+    #         }
 
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle general information queries"""
@@ -371,7 +371,7 @@ class AiAssistance:
                 user=state["user_id"], message="Retrieving Galaxy tools information..."
             )
             response = self.galaxy_handler.get_galaxy_info(
-                state["user_query"], state["user_id"]
+                state["user_query"], state["user_id"],state["token"]
             )
 
             return {
@@ -441,19 +441,78 @@ class AiAssistance:
             logger.error("Error in agent processing", exc_info=True)
             return f"Error processing query: {str(e)}"
 
-    async def assistant(
+    def answer_from_graph_summaries(self, query, user_id, resource, token, graph_id):
+        logger.info(
+            f"Answer from graph summaries called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}"
+        )
+        summary = None
+        try:
+            if resource == "annotation":
+                summary_result = self.graph_summarizer.summary(token=token, graph_id=graph_id, user_query=query)
+                # Extract text from dictionary if needed
+                summary_text = summary_result.get('text', '') if isinstance(summary_result, dict) else summary_result
+                emit_to_user(user=user_id, message="Analyzing...")
+
+            elif resource == "hypothesis":
+                summary_result = self.hypothesis_generation.get_by_hypothesis_id(
+                    token, graph_id, user_id, query
+                )
+                # Extract text from dictionary if needed  
+                summary_text = summary_result.get('text', '') if isinstance(summary_result, dict) else summary_result
+                emit_to_user(user=user_id, message="Analyzing...")
+
+            else:
+                logger.error(f"Unsupported resource type: '{resource}'")
+                return None
+
+            if query and summary_text:
+                prompt = classifier_prompt.format(query=query, graph_summary=summary_text)
+                response = self.advanced_llm.generate(prompt)
+                
+                # Log the raw response for debugging
+                logger.info(f"Classifier raw response: {response}")
+
+                # Handle Gemini's verbose responses - look for "related:" anywhere in the response
+                if "related:" in response:
+                    logger.info("Query is related with the graph")
+                    # Extract everything after "related:" and clean it up
+                    related_part = response.split("related:", 1)[1].strip()
+                    # Remove any trailing explanatory text that might come after the answer
+                    query_response = related_part.split('\n')[0].strip()
+                    
+                    self.history.create_history(user_id, query, query_response)
+                    logger.info(f"User query: {query}, Response: {query_response}")
+                    return query_response
+
+                # Check for "not" responses (case insensitive)
+                if "not" in response.lower():
+                    logger.info("Query is not related to the graph")
+                    return None
+                    
+            # Fallback: return raw summary if available
+            if summary_text:
+                return summary_text
+                
+            return None
+
+        except Exception as e:
+            logger.error(f"Error in answer_from_graph_summaries: {e}", exc_info=True)
+            return None
+
+    def assistant(
         self,
         query,
         user_id: str,
         token: str,
-        resource=None,
-        graph_id=None,
-        content_ids: Optional[List[str]] = None,
-    ):
+        graph_summary=None,
+        response_from_content=None,
+        files_response=None,
+        content_ids=None,
+        ):
+        
         logger.info(
-            f"Assistant called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}, content_ids: {content_ids}"
+            f"Assistant called with query: {query}, user_id: {user_id}"
         )
-
         try:
             user_information = self.store.get_context_and_memory(user_id)
             history = []
@@ -464,39 +523,30 @@ class AiAssistance:
                 m = item["MEMORIES"]
                 history.append({"question": q, "context": c})
                 memory.append(m)
-            content_summaries = self.get_content_summaries(user_id, content_ids)
         except Exception as e:
-            history = ""
-            memory = ""
-            content_summaries = []
+            history = " "
+            memory = " "
 
         logger.info(f"Histories of the user are : {history} and memories are {memory}")
-        graph_context = None
-        if graph_id:
-            logger.info(
-                f"Graph id has been passed to the given query {query} answering based on the graph"
-            )
-            graph_context = self.answer_from_graph_summaries(
-                query, user_id, resource, token, graph_id
-            )
-            return graph_context
 
         prompt = conversation_prompt.format(
             memory=memory,
             query=query,
-            history=history,
             conversation_history=history,
-            user_context=graph_context,
-            content_summaries=content_summaries,
+            graph_summary=graph_summary,
+            response_from_content=response_from_content,
+            files_response=files_response,
         )
-
+        logger.info("Advanced llm response")
         response = self.advanced_llm.generate(prompt)
+        logger.info(f"Response from the advanced LLM: {response}")
         emit_to_user(user=user_id, message="Analyzing...")
+        
         if response:
             if "response:" in response:
                 result = response.split("response:")[1].strip()
                 final_response = result.strip('"')
-                await self.store.save_user_information(
+                self.store.save_user_information(
                     advanced_llm=self.advanced_llm,
                     query=query,
                     user_id=user_id,
@@ -536,7 +586,6 @@ class AiAssistance:
                     logger.info(f"Here is the resource {response_resource}")
 
                 emit_to_user(user=user_id, message=agent_response, status="completed")
-                # Extract text from agent_response for history storage
                 assistant_answer = (
                     agent_response.get("text", str(agent_response))
                     if isinstance(agent_response, dict)
@@ -548,129 +597,91 @@ class AiAssistance:
                 return agent_response
         else:
             logger.error("No response generated from LLM")
-            await self.store.save_user_information(
-                self.advanced_llm,
-                query,
-                user_id,
-                resource,
-                graph_id_referenced=graph_id,
+            self.store.save_user_information(
+                self.advanced_llm, query, user_id, resource
             )
-            emit_to_user(
-                user=user_id,
-                message={
-                    "text": "I'm sorry, I couldn't generate a response at this time."
-                },
-                status="completed",
-            )
+          
             error_msg = (
                 "I apologize, but I encountered an error while processing your request."
             )
             emit_to_user(user=user_id, message={"text": error_msg}, status="completed")
             return {"text": error_msg}, history
 
-    def answer_from_graph_summaries(self, query, user_id, resource, token, graph_id):
-        logger.info(
-            f"Answer from graph summaries called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}"
-        )
-        if query:
-            logger.debug("Query provided with graph_id")
-            summary = None
-            if resource == "annotation":
-                # Process summary with query
-                summary = self.graph_summarizer.summary(token=token, graph_id=graph_id)
-                emit_to_user(user=user_id, message="Analyzing...")
 
-            elif resource == "hypothesis":
-                summary = self.hypothesis_generation.get_by_hypothesis_id(
-                    token, graph_id, user_id, query
-                )
-                emit_to_user(user=user_id, message="Analyzing...")
-                logger.info(f"Summaries of the graph id {graph_id} is {summary}")
-
-            prompt = classifier_prompt.format(query=query, graph_summary=summary)
-            response = self.advanced_llm.generate(prompt)
-            if response.startswith("related:"):
-                logger.info("question is related with the graph")
-                query_response = response[len("related:") :].strip()
-                # creating users history
-                self.history.create_history(
-                    user_id, query, query_response, graph_id_referenced=graph_id
-                )
-                logger.info(f"user query is {query} response is {query_response}")
-                return {"text": query_response}
-            elif "not" in response:
-                return None
-
-        logger.info("Only Graphid is provided")
-        if resource == "annotation":
-            # Process summary without query
-            summary = self.graph_summarizer.summary(
-                token=token, graph_id=graph_id, user_query=None
-            )
-            return summary
-        elif resource == "hypothesis":
-            logger.info("Hypothesis resource, no query provided")
-            summary = self.hypothesis_generation.get_by_hypothesis_id(
-                token, graph_id, query
-            )
-            return {"text": summary}
-        else:
-            logger.error(f"Unsupported resource type: '{resource}'")
-            return {"text": f"Unsupported resource type: '{resource}'"}
-
-    def assistant_response(
-        self,
-        query,
-        user_id,
-        token,
-        graph=None,
-        graph_id=None,
-        file=None,
-        resource="annotation",
-        json_query=None,
-        content_ids=None,
-    ):
-        logger.info(
-            f"Assistant response called with query: {query}, user_id: {user_id}, resource: {resource}, graph_id: {graph_id}, content_ids: {content_ids}"
-        )
+    def assistant_response(self, query, user_id, token, graph=None, graph_id=None, 
+                      files=None, resource=None, json_query=None, content_ids=None):
+        """Simple routing logic for queries"""
+        
         try:
             logger.info(
-                f"passes parameters are query = {query}, user_id= {user_id}, graphid={graph_id}, graph = {graph}, resource = {resource}, content_ids = {content_ids}"
+                f"Assistant response called with query={query}, user_id={user_id}, resource={resource}, graph_id={graph_id}, content_ids={content_ids}, files={files}")
+
+            if not any([graph_id, files, content_ids, resource]):
+                response = self.assistant(query=query, user_id=user_id, token=token)
+                self.history.create_history(user_id, query, response)
+                return response
+            
+            if not graph_id:
+                if resource == "galaxy" and files or files:
+                    response = self.galaxy_handler.get_galaxy_info(query, user_id,token,files)
+                elif resource == "content" and content_ids or content_ids:
+                    response = self.rag.get_result_from_rag(query, user_id, content_ids)
+                else:
+                    response = self.assistant(query=query, user_id=user_id, token=token)
+                
+                self.history.create_history(user_id, query, response)
+                return response
+            
+            graph_summary = None
+            if graph_id:
+                graph_summary = self.graph_summarizer.summary(token=token, graph_id=graph_id, user_query=query)
+            
+            files_response = None
+            content_response = None
+            
+            if files:
+                files_response = self.galaxy_handler.get_galaxy_info(query, user_id, files,token)
+            if content_ids:
+                content_response = self.rag.get_result_from_rag(query, user_id, content_ids)
+            
+            # Check if graph summary alone can answer
+            if graph_summary and self._can_graph_answer(query, graph_summary):
+                self.history.create_history(user_id, query, graph_summary)
+                return {"text":graph_summary["text"]}
+            
+            # Use full assistant with all context
+            response = self.assistant(
+                query=query, user_id=user_id, token=token,
+                graph_summary=graph_summary,
+                response_from_content=content_response,
+                files_response=files_response,
+                content_ids=content_ids
             )
-            logger.info(
-                f"agent being called for a given query {query} from resource {resource} with content_ids: {content_ids}"
-            )
-            response = asyncio.run(
-                self.assistant(
-                    query=query,
-                    user_id=user_id,
-                    token=token,
-                    resource=resource,
-                    graph_id=graph_id,
-                    content_ids=content_ids,
-                )
-            )
+            
+            self.history.create_history(user_id, query, response)
             return response
+            
+        except Exception as e:
+            logger.error(f"Error: {e}")
+            return {"text": "Error processing request."}
 
-            # if query and graph:
-            #     summary = self.graph_summarizer.summary(user_query=query,graph=graph)
-            #     self.history.create_history(user_id, query, response)
-            #     return summary
-
-            # if graph:
-            #     summary = self.graph_summarizer.summary(user_query=query,graph=graph)
-            #     self.history.create_history(user_id, query, response)
-            #     return summary
-
-            # if json_query:
-            #     logger.info(f"Executing a json query {json_query} to the annotation service")
-            #     try:
-            #         logger.info(f"Generating graph with arguments: {json_query}")  # Add this line to log the arguments
-            #         response = self.annotation_graph.generate_graph(f"",json_query,token)
-            #         return response
-            #     except Exception as e:
-            #         logger.error("Error in generating graph", exc_info=True)
-            #         return f"I couldn't generate a graph for the given format would you please try again."
-
+    def _can_graph_answer(self, query, graph_summary):
+        """Quick check if graph summary can answer the query"""
+        try:
+            prompt = f"""
+            Query: "{query}"
+            Graph Summary: "{graph_summary}"
+            
+            If this question is asking ANYTHING about the graph/network/data  
+            then the graph summary MUST be able to provide some answer - even if it's "none", "zero", "not present", or "unknown".
+            
+            Questions about graphs should ALWAYS be answerable from graph data.
+            
+            Is this question about the graph/network? Answer only: yes or no
+            """
+            response = self.advanced_llm.generate(prompt)
+            return 'yes' in response.lower()
         except:
+            import traceback
             traceback.print_exc()
+            return False
