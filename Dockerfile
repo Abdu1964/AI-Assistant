@@ -7,6 +7,7 @@ ENV POETRY_HTTP_TIMEOUT=600
 # Set the working directory
 WORKDIR /AI-Assistant
 
+
 # Install Poetry
 RUN pip install poetry
 
@@ -16,6 +17,9 @@ COPY . /AI-Assistant
 # Install dependencies 
 RUN poetry config virtualenvs.create false && \
     poetry install --no-root --no-interaction
+
+# Create log directory and set permissions
+RUN mkdir -p /AI-Assistant/logfiles && chmod 755 /AI-Assistant/logfiles
 
 # Run the application
 CMD ["gunicorn", "-w", "4", "--bind", "0.0.0.0:$FLASK_PORT", "run:app"]
