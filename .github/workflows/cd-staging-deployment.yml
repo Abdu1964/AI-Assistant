@@ -28,10 +28,10 @@ jobs:
           repository: Abdu1964/ansible-deploy_v2.0
           path: ansible-deploy_v2.0
 
-      - name: Create .env file for AI_Assistant
+      - name: Create .env file for AI-Assistant
         run: |
-          mkdir -p $HOME/services/AI_Assistant
-          cat > $HOME/services/AI_Assistant/.env << EOF
+          mkdir -p $HOME/services/AI-Assistant
+          cat > $HOME/services/AI-Assistant/.env << EOF
           # === Port Configuration ===
           FLASK_HOST_PORT=${{ secrets.FLASK_HOST_PORT }}
           FLASK_INTERNAL_PORT=${{ secrets.FLASK_INTERNAL_PORT }}
@@ -125,7 +125,7 @@ jobs:
           ansible-playbook -i inventory/hosts.ini playbooks/deploy_ai_assistant.yml \
             --tags "AI_Assistant_Remote" \
             --tags "local_network" \
-            -e "install_dir=$HOME/services/AI_Assistant" \
+            -e "install_dir=$HOME/services/AI-Assistant" \
             -e "ansible_user_id=$(whoami)" \
             -e "ansible_user_dir=$HOME" \
             -v
