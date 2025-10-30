@@ -9,7 +9,11 @@ from .annotation_graph.schema_handler import SchemaHandler
 from .rag.rag import RAG
 from .rag.utils.web_search import SimpleWebSearch
 from .prompts.conversation_handler import conversation_prompt
-from .prompts.classifier_prompt import classifier_prompt, answer_from_graph
+from .prompts.classifier_prompt import (
+    classifier_prompt,
+    answer_from_graph,
+    main_classifier_prompt,
+)
 from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
 from .storage.history_manager import HistoryManager
@@ -57,6 +61,7 @@ class AgentState(TypedDict):
     response: str
     error: str
     content_ids: Optional[List[str]]
+    pipeline_details: Dict[str, Any]
 
 
 class AiAssistance:
@@ -91,21 +96,20 @@ class AiAssistance:
 
     def _create_workflow(self) -> StateGraph:
         """Create the LangGraph workflow"""
-
         logger.info("Creating LangGraph workflow with tools and nodes")
 
         # Define tools
-        @tool
-        def get_json_format(query: str, token: str) -> str:
-            """Retrieve the json format provided from the annotation graph tool"""
-            logger.info(f"get_json_format called with query: {query}")
-            try:
-                logger.info(f"Generating graph with arguments: {query}")
-                response = self.annotation_graph.validated_json(query)
-                return response
-            except Exception as e:
-                logger.error("Error in generating graph", exc_info=True)
-                return f"I couldn't generate a graph for the given question {query} please try again."
+        # @tool
+        # def get_json_format(query: str, token: str) -> str:
+        #     """Retrieve the json format provided from the annotation graph tool"""
+        #     logger.info(f"get_json_format called with query: {query}")
+        #     try:
+        #         logger.info(f"Generating graph with arguments: {query}")
+        #         response = self.annotation_graph.validated_json(query)
+        #         return response
+        #     except Exception as e:
+        #         logger.error("Error in generating graph", exc_info=True)
+        #         return f"I couldn't generate a graph for the given question {query} please try again."
 
         @tool
         def get_general_response(query: str, user_id: str) -> str:
@@ -150,7 +154,6 @@ class AiAssistance:
                 return "Error retrieving Galaxy tools information."
 
         self.tools = [
-            get_json_format,
             get_general_response,
             # hypothesis_generation,
             get_galaxy_tools,
@@ -173,8 +176,9 @@ class AiAssistance:
             "classifier",
             self._route_query,
             {
-                "annotation": "annotation_agent",
-                # "hypothesis": "hypothesis_agent",
+                "annotation_biological": "annotation_agent",
+                "annotation_general": "annotation_agent",
+                "hypothesis": "hypothesis_agent",
                 "rag": "rag_agent",
                 "galaxy": "galaxy_agent",
                 "error": "finalizer",
@@ -243,19 +247,11 @@ class AiAssistance:
         web_context = f"Web context: {', '.join(web_urls)}" if web_urls else ""
 
         logger.info(f"Classifying query: {query}")
-        classifier_prompt = f"""Classify this query into one of these categories:
-        - annotation: Requests for factual information about genes, proteins, variants, or biological graphs/networks
-        - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities recommending of tools conversions 
-        - rag: General information requests, including queries about uploaded PDFs, web content, or document profiles (e.g., questions about content summaries, metadata, or content)
-        
-        User query: {query}
-        Content summaries: {content_summaries}
-        {web_context}
-        
-        Respond ONLY with the category name."
-        """
+        classifier_prompt_text = main_classifier_prompt.format(
+            query=query, content_summaries=content_summaries, web_context=web_context
+        )
 
-        response = self.advanced_llm.generate(classifier_prompt).lower()
+        response = self.advanced_llm.generate(classifier_prompt_text).lower()
         query_type = response.split()[0]  # Take first word in case LLM adds explanation
 
         logger.info(f"Query classified as: {query_type}")
@@ -272,32 +268,85 @@ class AiAssistance:
         return route
 
     def _annotation_agent(self, state: AgentState) -> Dict[str, Any]:
-        """Handle annotation-related queries"""
+        """Handle annotation-related queries using internal pipeline"""
+        query_type = state.get("query_type", "annotation_biological")
         logger.info(
-            f"Annotation agent processing query: {state['user_query']} for user: {state['user_id']}"
+            f"Annotation agent processing query: {state['user_query']} for user: {state['user_id']}, type: {query_type}"
         )
         try:
-            emit_to_user(
-                user=state["user_id"], message="Creating Query Builder Format..."
-            )
-            # Use the annotation graph tool
-            response = self.annotation_graph.validated_json(
-                state["user_query"], user_id=state["user_id"]
+            if query_type == "annotation_biological":
+                emit_to_user(
+                    user=state["user_id"], message="Processing your biological query..."
+                )
+            elif query_type == "annotation_general":
+                emit_to_user(
+                    user=state["user_id"], message="Analyzing database information..."
+                )
+
+            # Use the new internal annotation pipeline with query type
+            pipeline_response = self.annotation_graph.process_annotation_query(
+                query=state["user_query"],
+                user_id=state["user_id"],
+                query_type=query_type,
             )
 
-            return {
-                "response": response,
-                "messages": [
-                    AIMessage(content=f"Annotation query processed: {response}")
-                ],
-            }
+            if pipeline_response.get("success", False):
+                # Pipeline succeeded - return user-friendly summary
+                summary = pipeline_response.get("summary", "No summary available")
+                cypher_query = pipeline_response.get("cypher_query", "No Cypher query")
+
+                # Log successful pipeline execution
+                logger.info(
+                    f"Annotation pipeline completed successfully for user: {state['user_id']}"
+                )
+                logger.debug(f"Cypher query generated: {cypher_query}")
+
+                return {
+                    "response": summary,
+                    "messages": [
+                        AIMessage(
+                            content=f"Annotation query processed successfully: {summary}"
+                        )
+                    ],
+                    "pipeline_details": {
+                        "cypher_query": cypher_query,
+                        "json_query": pipeline_response.get("json_query", {}),
+                        "counts": pipeline_response.get("database_results", {})
+                        .get("data", {})
+                        .get("counts", pipeline_response.get("counts", {})),
+                        "pipeline_status": pipeline_response.get("pipeline_status", {}),
+                    },
+                }
+            else:
+                # Pipeline failed - return error information
+                error_msg = pipeline_response.get("error", "Unknown error occurred")
+                pipeline_status = pipeline_response.get("pipeline_status", {})
+
+                logger.error(
+                    f"Annotation pipeline failed for user {state['user_id']}: {error_msg}"
+                )
+                logger.error(f"Pipeline status: {pipeline_status}")
+
+                return {
+                    "response": f"I'm sorry, but I encountered an error while processing your query: {error_msg}",
+                    "error": error_msg,
+                    "messages": [
+                        AIMessage(content=f"Annotation pipeline failed: {error_msg}")
+                    ],
+                    "pipeline_details": {
+                        "pipeline_status": pipeline_status,
+                    },
+                }
+
         except Exception as e:
-            logger.error("Error in annotation agent", exc_info=True)
+            logger.error("Unexpected error in annotation agent", exc_info=True)
             return {
-                "response": f"Error processing annotation query: {str(e)}",
+                "response": f"An unexpected error occurred while processing your query: {str(e)}",
                 "error": str(e),
                 "messages": [
-                    AIMessage(content=f"Error in annotation processing: {str(e)}")
+                    AIMessage(
+                        content=f"Unexpected error in annotation processing: {str(e)}"
+                    )
                 ],
             }
 
@@ -314,19 +363,19 @@ class AiAssistance:
     #             user_id=state["user_id"],
     #         )
 
-    #         return {
-    #             "response": response,
-    #             "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
-    #         }
-    #     except Exception as e:
-    #         logger.error("Error in hypothesis agent", exc_info=True)
-    #         return {
-    #             "response": f"Error generating hypothesis: {str(e)}",
-    #             "error": str(e),
-    #             "messages": [
-    #                 AIMessage(content=f"Error in hypothesis generation: {str(e)}")
-    #             ],
-    #         }
+            return {
+                "response": response,
+                "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
+            }
+        except Exception as e:
+            logger.error("Error in hypothesis agent", exc_info=True)
+            return {
+                "response": f"Error generating hypothesis: {str(e)}",
+                "error": str(e),
+                "messages": [
+                    AIMessage(content=f"Error in hypothesis generation: {str(e)}")
+                ],
+            }
 
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle general information queries"""
@@ -391,10 +440,23 @@ class AiAssistance:
     def _finalize_response(self, state: AgentState) -> Dict[str, Any]:
         """Finalize and return the response"""
         response = state.get("response", "No response generated")
+        pipeline_details = state.get("pipeline_details", {})
+
         logger.info(
             f"Finalizing response for user: {state.get('user_id')}, response length: {len(str(response))}"
         )
 
+        # If we have pipeline details, return the rich response
+        if pipeline_details:
+            logger.info("Returning rich response with pipeline details")
+            return {
+                "response": response,
+                "pipeline_details": pipeline_details,
+                "messages": [AIMessage(content=f"Final response: {response}")],
+            }
+
+        # Otherwise, return the basic response
+        logger.info("Returning basic response")
         return {"messages": [AIMessage(content=f"Final response: {response}")]}
 
     def agent(
@@ -424,18 +486,24 @@ class AiAssistance:
             # Run the workflow
             result = self.app.invoke(initial_state)
 
-            # Extract response
+            # Extract response (preserve pipeline_details when present)
             response = result.get("response", "")
-            if response:
-                return response
+            pipeline_details = result.get("pipeline_details")
+            if response or pipeline_details:
+                if isinstance(response, dict):
+                    return response
+                return {
+                    "text": response if isinstance(response, str) else str(response),
+                    "pipeline_details": pipeline_details or {},
+                }
 
             # Fallback to last message content
             if result.get("messages"):
                 last_message = result["messages"][-1]
                 if hasattr(last_message, "content"):
-                    return last_message.content
+                    return {"text": last_message.content, "pipeline_details": {}}
 
-            return "No response generated"
+            return {"text": "No response generated", "pipeline_details": {}}
 
         except Exception as e:
             logger.error("Error in agent processing", exc_info=True)

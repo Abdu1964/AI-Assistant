@@ -77,7 +77,11 @@ def gemini_embedding_model(batch):
 
     return embeddings
 
+
+# Load the SentenceTransformer model once at module level
 model = SentenceTransformer("all-MiniLM-L6-v2")
+
+
 # Function to generate sentence transformers embeddings
 def sentence_transformer_embedding_model(batch):
     return model.encode(batch, convert_to_numpy=True).tolist()
