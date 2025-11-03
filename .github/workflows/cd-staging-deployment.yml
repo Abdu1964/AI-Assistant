@@ -63,6 +63,7 @@ jobs:
           MONGO_USERNAME=${{ secrets.MONGO_USERNAME }}
           MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD }}
           MONGO_DATABASE=${{ secrets.MONGO_DATABASE }}
+          MONGO_URL=mongodb://${{ secrets.MONGO_USERNAME }}:${{ secrets.MONGO_PASSWORD }}@mongodb:${{ secrets.MONGODB_INTERNAL_PORT }}/
           
           # === Docker Images ===
           ai_assistant_staging=${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging
