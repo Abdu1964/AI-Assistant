@@ -178,7 +178,7 @@ class AiAssistance:
             {
                 "annotation_biological": "annotation_agent",
                 "annotation_general": "annotation_agent",
-                "hypothesis": "hypothesis_agent",
+                # "hypothesis": "hypothesis_agent",
                 "rag": "rag_agent",
                 "galaxy": "galaxy_agent",
                 "error": "finalizer",
@@ -289,53 +289,29 @@ class AiAssistance:
                 user_id=state["user_id"],
                 query_type=query_type,
             )
-
+            logger.info(f"Pipeline response: {pipeline_response}")
             if pipeline_response.get("success", False):
                 # Pipeline succeeded - return user-friendly summary
-                summary = pipeline_response.get("summary", "No summary available")
-                cypher_query = pipeline_response.get("cypher_query", "No Cypher query")
-
-                # Log successful pipeline execution
                 logger.info(
                     f"Annotation pipeline completed successfully for user: {state['user_id']}"
                 )
-                logger.debug(f"Cypher query generated: {cypher_query}")
+                summary = pipeline_response.get("summary", "")
+                json_query = pipeline_response.get("json_format", None)
 
-                return {
-                    "response": summary,
-                    "messages": [
-                        AIMessage(
-                            content=f"Annotation query processed successfully: {summary}"
-                        )
-                    ],
-                    "pipeline_details": {
-                        "cypher_query": cypher_query,
-                        "json_query": pipeline_response.get("json_query", {}),
-                        "counts": pipeline_response.get("database_results", {})
-                        .get("data", {})
-                        .get("counts", pipeline_response.get("counts", {})),
-                        "pipeline_status": pipeline_response.get("pipeline_status", {}),
-                    },
+                response_dict = {
+                    "text": summary if summary else "",
+                    "json_query": json_query if json_query is not None else None
                 }
-            else:
-                # Pipeline failed - return error information
-                error_msg = pipeline_response.get("error", "Unknown error occurred")
-                pipeline_status = pipeline_response.get("pipeline_status", {})
 
+                return {"response": response_dict}
+
+            else:
                 logger.error(
                     f"Annotation pipeline failed for user {state['user_id']}: {error_msg}"
                 )
-                logger.error(f"Pipeline status: {pipeline_status}")
-
                 return {
                     "response": f"I'm sorry, but I encountered an error while processing your query: {error_msg}",
                     "error": error_msg,
-                    "messages": [
-                        AIMessage(content=f"Annotation pipeline failed: {error_msg}")
-                    ],
-                    "pipeline_details": {
-                        "pipeline_status": pipeline_status,
-                    },
                 }
 
         except Exception as e:
@@ -363,19 +339,19 @@ class AiAssistance:
     #             user_id=state["user_id"],
     #         )
 
-            return {
-                "response": response,
-                "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
-            }
-        except Exception as e:
-            logger.error("Error in hypothesis agent", exc_info=True)
-            return {
-                "response": f"Error generating hypothesis: {str(e)}",
-                "error": str(e),
-                "messages": [
-                    AIMessage(content=f"Error in hypothesis generation: {str(e)}")
-                ],
-            }
+        #     return {
+        #         "response": response,
+        #         "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
+        #     }
+        # except Exception as e:
+        #     logger.error("Error in hypothesis agent", exc_info=True)
+        #     return {
+        #         "response": f"Error generating hypothesis: {str(e)}",
+        #         "error": str(e),
+        #         "messages": [
+        #             AIMessage(content=f"Error in hypothesis generation: {str(e)}")
+        #         ],
+        #     }
 
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle general information queries"""
@@ -438,26 +414,16 @@ class AiAssistance:
             }
 
     def _finalize_response(self, state: AgentState) -> Dict[str, Any]:
-        """Finalize and return the response"""
-        response = state.get("response", "No response generated")
-        pipeline_details = state.get("pipeline_details", {})
-
         logger.info(
             f"Finalizing response for user: {state.get('user_id')}, response length: {len(str(response))}"
         )
+        response = state.get("response", {})
+        if not isinstance(response, dict):
+            response = {"text": str(response), "json_query": None}
+        response.setdefault("text", "")
+        response.setdefault("json_query", None)
+        return response  # Only text and json_query
 
-        # If we have pipeline details, return the rich response
-        if pipeline_details:
-            logger.info("Returning rich response with pipeline details")
-            return {
-                "response": response,
-                "pipeline_details": pipeline_details,
-                "messages": [AIMessage(content=f"Final response: {response}")],
-            }
-
-        # Otherwise, return the basic response
-        logger.info("Returning basic response")
-        return {"messages": [AIMessage(content=f"Final response: {response}")]}
 
     def agent(
         self,
@@ -486,24 +452,17 @@ class AiAssistance:
             # Run the workflow
             result = self.app.invoke(initial_state)
 
-            # Extract response (preserve pipeline_details when present)
-            response = result.get("response", "")
-            pipeline_details = result.get("pipeline_details")
-            if response or pipeline_details:
-                if isinstance(response, dict):
-                    return response
-                return {
-                    "text": response if isinstance(response, str) else str(response),
-                    "pipeline_details": pipeline_details or {},
-                }
+            # Always extract the structured response
+            response = result.get("response", {"text": "", "json_query": None})
 
-            # Fallback to last message content
-            if result.get("messages"):
-                last_message = result["messages"][-1]
-                if hasattr(last_message, "content"):
-                    return {"text": last_message.content, "pipeline_details": {}}
+            # Ensure consistent keys
+            if not isinstance(response, dict):
+                response = {"text": str(response), "json_query": None}
+            else:
+                response.setdefault("text", "")
+                response.setdefault("json_query", None)
 
-            return {"text": "No response generated", "pipeline_details": {}}
+            return response
 
         except Exception as e:
             logger.error("Error in agent processing", exc_info=True)

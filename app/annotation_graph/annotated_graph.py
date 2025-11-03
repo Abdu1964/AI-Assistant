@@ -576,22 +576,26 @@ class Graph:
 
                 if validation["validation_report"]["validation_status"] == "failed":
                     logger.error("JSON validation failed")
-                    return {
-                        "success": False,
-                        "error": f"JSON validation failed: {validation['validation_report'].get('error_message', 'Unknown validation error')}",
-                        "pipeline_status": {"json_extraction": "failed"},
-                    }
-
-                # Use the updated JSON for subsequent steps
-                json_query = {
-                    "text": None,
-                    "json_format": validation["updated_json"],
+                    json_query = {
+                    "success" : True,
+                    "summary" : None,
+                    "json_format": initial_json,
                     "resource": {"id": None, "type": "annotation"},
-                }
+                    }
+                else:
+                    # Use the updated JSON for subsequent steps
+                    json_query = {
+                        "success" : True,
+                        "summary" : None,
+                        "json_format": validation["updated_json"],
+                        "resource": {"id": None, "type": "annotation"},
+                    }
 
                 logger.info("JSON query extraction successful")
                 logger.info(f"JSON query structure: {json.dumps(json_query, indent=2)}")
-
+                
+                return json_query
+            
             except Exception as e:
                 logger.error(f"Failed to extract JSON query: {str(e)}")
                 return {
@@ -600,99 +604,99 @@ class Graph:
                     "pipeline_status": {"json_extraction": "failed"},
                 }
 
-            logger.info("JSON query extraction successful")
-            emit_to_user(
-                user=user_id, message="Converting query to database language..."
-            )
+            # logger.info("JSON query extraction successful")
+            # emit_to_user(
+            #     user=user_id, message="Converting query to database language..."
+            # )
 
-            # Convert JSON to Cypher
-            try:
-                actual_json = json_query.get("json_format", json_query)
-                if not actual_json:
-                    raise ValueError("No valid JSON format found in the response")
+            # # # Convert JSON to Cypher
+            # # try:
+            # #     actual_json = json_query.get("json_format", json_query)
+            # #     if not actual_json:
+            # #         raise ValueError("No valid JSON format found in the response")
 
-                logger.info(
-                    f"Extracted JSON for Cypher conversion: {json.dumps(actual_json, indent=2)}"
-                )
+            # #     logger.info(
+            # #         f"Extracted JSON for Cypher conversion: {json.dumps(actual_json, indent=2)}"
+            # #     )
 
-                converter = JsonToCypherConverter()
-                cypher_query = converter.convert_to_cypher(actual_json)
-                logger.info("Cypher conversion successful")
-            except Exception as e:
-                logger.error(f"Failed to convert JSON to Cypher: {str(e)}")
-                return {
-                    "success": False,
-                    "error": f"Failed to convert query to database language: {str(e)}",
-                    "pipeline_status": {
-                        "json_extraction": "success",
-                        "cypher_conversion": "failed",
-                    },
-                    "json_query": json_query,
-                }
+            # #     converter = JsonToCypherConverter()
+            # #     cypher_query = converter.convert_to_cypher(actual_json)
+            # #     logger.info("Cypher conversion successful")
+            # # except Exception as e:
+            # #     logger.error(f"Failed to convert JSON to Cypher: {str(e)}")
+            # #     return {
+            # #         "success": False,
+            # #         "error": f"Failed to convert query to database language: {str(e)}",
+            # #         "pipeline_status": {
+            # #             "json_extraction": "success",
+            # #             "cypher_conversion": "failed",
+            # #         },
+            # #         "json_query": json_query,
+            # #     }
 
-            emit_to_user(user=user_id, message="Searching the database...")
+            # # emit_to_user(user=user_id, message="Searching the database...")
 
-            # Execute Cypher query against database
-            try:
-                database_results = self.execute_cypher_query(cypher_query)
-                if not database_results.get("success", False):
-                    logger.error(
-                        f"Database query failed: {database_results.get('error')}"
-                    )
-                    return {
-                        "success": False,
-                        "error": f"Database search failed: {database_results.get('error', 'Unknown error')}",
-                        "pipeline_status": {
-                            "json_extraction": "success",
-                            "cypher_conversion": "success",
-                            "database_execution": "failed",
-                        },
-                        "cypher_query": cypher_query,
-                        "json_query": json_query,
-                    }
-                logger.info("Database query execution successful")
-            except Exception as e:
-                logger.error(f"Failed to execute Cypher query: {str(e)}")
-                return {
-                    "success": False,
-                    "error": f"Database execution error: {str(e)}",
-                    "pipeline_status": {
-                        "json_extraction": "success",
-                        "cypher_conversion": "success",
-                        "database_execution": "failed",
-                    },
-                    "cypher_query": cypher_query,
-                    "json_query": json_query,
-                }
+            # # # Execute Cypher query against database
+            # # try:
+            # #     database_results = self.execute_cypher_query(cypher_query)
+            # #     if not database_results.get("success", False):
+            # #         logger.error(
+            # #             f"Database query failed: {database_results.get('error')}"
+            # #         )
+            # #         return {
+            # #             "success": False,
+            # #             "error": f"Database search failed: {database_results.get('error', 'Unknown error')}",
+            # #             "pipeline_status": {
+            # #                 "json_extraction": "success",
+            # #                 "cypher_conversion": "success",
+            # #                 "database_execution": "failed",
+            # #             },
+            # #             "cypher_query": cypher_query,
+            # #             "json_query": json_query,
+            # #         }
+            # #     logger.info("Database query execution successful")
+            # # except Exception as e:
+            # #     logger.error(f"Failed to execute Cypher query: {str(e)}")
+            # #     return {
+            # #         "success": False,
+            # #         "error": f"Database execution error: {str(e)}",
+            # #         "pipeline_status": {
+            # #             "json_extraction": "success",
+            # #             "cypher_conversion": "success",
+            # #             "database_execution": "failed",
+            # #         },
+            # #         "cypher_query": cypher_query,
+            # #         "json_query": json_query,
+            # #     }
 
-            emit_to_user(user=user_id, message="Generating your response...")
+            # # emit_to_user(user=user_id, message="Generating your response...")
 
-            # Summarize results using LLM
-            try:
-                summary = self.summarize_results(query, database_results)
-                logger.info("Result summarization successful")
-            except Exception as e:
-                logger.error(f"Failed to summarize results: {str(e)}")
-                summary = f"I found information related to your query '{query}', but encountered an issue generating a detailed summary. Here are the raw results: {database_results.get('data', {}).get('counts', {}).get('total_nodes', 0)} items found."
-                logger.warning(
-                    "Using fallback summary due to LLM summarization failure"
-                )
+            # # # Summarize results using LLM
+            # # try:
+            # #     summary = self.summarize_results(query, database_results)
+            # #     logger.info("Result summarization successful")
+            # # except Exception as e:
+            # #     logger.error(f"Failed to summarize results: {str(e)}")
+            # #     summary = f"I found information related to your query '{query}', but encountered an issue generating a detailed summary. Here are the raw results: {database_results.get('data', {}).get('counts', {}).get('total_nodes', 0)} items found."
+            # #     logger.warning(
+            # #         "Using fallback summary due to LLM summarization failure"
+            # #     )
 
-            logger.info("Annotation pipeline completed successfully")
-            return {
-                "success": True,
-                "summary": summary,
-                "cypher_query": cypher_query,
-                "database_results": database_results,
-                "json_query": json_query,
-                "error": None,
-                "pipeline_status": {
-                    "json_extraction": "success",
-                    "cypher_conversion": "success",
-                    "database_execution": "success",
-                    "summarization": "success",
-                },
-            }
+            # # logger.info("Annotation pipeline completed successfully")
+            # # return {
+            # #     "success": True,
+            # #     "summary": summary,
+            # #     "cypher_query": cypher_query,
+            # #     "database_results": database_results,
+            # #     "json_query": json_query,
+            # #     "error": None,
+            # #     "pipeline_status": {
+            # #         "json_extraction": "success",
+            # #         "cypher_conversion": "success",
+            # #         "database_execution": "success",
+            # #         "summarization": "success",
+            # #     },
+            # # }
 
         except Exception as e:
             error_msg = f"Unexpected error in biological query pipeline: {str(e)}"
