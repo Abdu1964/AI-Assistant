@@ -42,14 +42,24 @@ def process_query(current_user_id, auth_token):
             context = json.loads(context_raw)
         except Exception:
             context = {}
-        context_id = context.get("id", None)
+        context_id = context.get("content_id", None)
+        graph_id = context.get("id",None)
         resource = context.get("resource", "annotation")
+        url = context.get("url",None)
         graph = data.get("graph", None)
         json_query = data.get("json_query", None)
 
+        if url:
+            if isinstance(url, str):
+                url = [url]
+            elif isinstance(url, list):
+                url = url
+            else:
+                url = list(url)
+
         # Determine content_ids if resource is content and id is a list or string
         content_ids = None
-        if resource == "content":
+        if context_id is not None:
             if isinstance(context_id, list):
                 content_ids = context_id
             elif isinstance(context_id, str):
@@ -67,17 +77,17 @@ def process_query(current_user_id, auth_token):
         # Ensure query exists before processing
         if not question and not json_query:
             return jsonify({"error": "No query provided."}), 400
-
         # Pass all relevant arguments to ai_assistant
         response = ai_assistant.assistant_response(
             query=question,
             user_id=user_id,
             token=auth_token,
-            graph_id=context_id if resource != "content" else None,
+            graph_id=graph_id,
             graph=graph,
             resource=resource,
             json_query=json_query,
             content_ids=content_ids,
+            files=url
         )
 
         return jsonify(response)
@@ -355,7 +365,7 @@ def delete_content(current_user_id, auth_token):
     # Unified endpoint for deleting content (PDF or web)
     try:
         data = request.form
-        user_id = data.get("user_id")
+        user_id = current_user_id
         content_id = data.get("content_id")
         content_type = data.get("content_type", "pdf")
         if not user_id or not content_id:
@@ -402,7 +412,7 @@ def get_summary_audio(current_user_id, auth_token):
     # Generate and serve summary audio on-demand, with Redis caching
     try:
         data = request.form
-        user_id = data.get("user_id") if data else None
+        user_id = current_user_id
         content_id = data.get("content_id") if data else None
 
         if not user_id or not content_id:
@@ -453,7 +463,7 @@ def get_query_audio(current_user_id, auth_token):
     # Generate and serve query audio on-demand using query_id, with Redis caching
     try:
         data = request.form
-        user_id = data.get("user_id") if data else None
+        user_id = current_user_id
         query_id = data.get("query_id") if data else None
 
         if not user_id or not query_id:
