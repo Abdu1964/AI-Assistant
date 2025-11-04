@@ -414,10 +414,10 @@ class AiAssistance:
             }
 
     def _finalize_response(self, state: AgentState) -> Dict[str, Any]:
+        response = state.get("response", {})
         logger.info(
             f"Finalizing response for user: {state.get('user_id')}, response length: {len(str(response))}"
         )
-        response = state.get("response", {})
         if not isinstance(response, dict):
             response = {"text": str(response), "json_query": None}
         response.setdefault("text", "")
