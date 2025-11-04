@@ -2,8 +2,7 @@
 import asyncio
 import logging
 import traceback
-# from app.Galaxy_integration.galaxy_content import GalaxyContentProcessor
-# from app.Galaxy_integration.galaxy_content import HTMLProcessor
+from app.Galaxy_integration.galaxy_content_clean import HTMLProcessor
 from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 import os
@@ -43,14 +42,6 @@ class GalaxyHandler:
             files = [files]
 
         try:
-            # processor = GalaxyContentProcessor(
-            #     dataset_name="html_galaxy_dataset",
-            #     embedding_model=self.embedding_model,
-            #     qdrant_client=self.qdrant_client
-            # )
-            # processor = HTMLProcessor(self.qdrant_client).store_embedded(url=files, collection_name=self.collection_name)
-            # logger.info(f"GalaxyContentProcessor initialized {processor}")
-            # return processor
             processor = HTMLProcessor(self.qdrant_client)
             for f in files:
                 logger.info(f"this are the url id to be searched {f}")
@@ -64,7 +55,6 @@ class GalaxyHandler:
                 if not stored:
                     new_chunks = processor.store_embedded(url=f, collection_name=self.collection_name)
                     logger.info(f"Document has been stored succesfully {new_chunks}")
-            
             # Retrieve relevant chunks
             similar_results = self.qdrant_client.retrieve_similar_content(
             collection_name=self.collection_name,
