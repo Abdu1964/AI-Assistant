@@ -42,7 +42,7 @@ class GalaxyHandler:
             files = [files]
 
         try:
-            processor = HTMLProcessor(self.qdrant_client)
+            processor = HTMLProcessor(self.qdrant_client,self.llm)
             for f in files:
                 logger.info(f"this are the url id to be searched {f}")
                 stored = self.qdrant_client.retrieve_similar_content(
