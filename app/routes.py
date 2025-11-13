@@ -85,7 +85,6 @@ def process_query(current_user_id, auth_token):
             graph_id=graph_id,
             graph=graph,
             resource=resource,
-            json_query=json_query,
             content_ids=content_ids,
             files=url
         )
