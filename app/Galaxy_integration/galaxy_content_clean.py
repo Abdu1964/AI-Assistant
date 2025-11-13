@@ -21,17 +21,14 @@ logger = logging.getLogger(__name__)
 
 
 class HTMLProcessor:
-    def __init__(self, qdrant_client, use_openai=True):
+    def __init__(self, qdrant_client, llm):
         self.qdrant = qdrant_client
         # MUCH SMALLER CHUNKS - better for embeddings
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=1500,  # Changed from 8000
             chunk_overlap=200
         )
-        self.llm = get_llm_model(
-            "openai" if use_openai else "gemini",
-            "gpt-3.5-turbo" if use_openai else "gemini-1.5-flash"
-        )
+        self.llm = llm
 
     def deep_clean_text(self, text: str) -> str:
         """Aggressive cleaning for better embeddings"""
