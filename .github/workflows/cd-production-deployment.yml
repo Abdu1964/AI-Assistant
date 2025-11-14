@@ -25,13 +25,13 @@ jobs:
       - name: Checkout Ansible repository
         uses: actions/checkout@v4
         with:
-          repository: Abdu1964/ansible-deploy_v2.0
-          path: ansible-deploy_v2.0
+          repository: rejuve-bio/ansible-deploy
+          path: ansible-deploy
 
-      - name: Create .env file for AI_Assistant
+      - name: Create .env file for AI-Assistant
         run: |
-          mkdir -p $HOME/services/AI_Assistant
-          cat > $HOME/services/AI_Assistant/.env << EOF
+          mkdir -p $HOME/services/AI-Assistant
+          cat > $HOME/services/AI-Assistant/.env << EOF
           # === Port Configuration ===
           FLASK_HOST_PORT=${{ secrets.FLASK_HOST_PORT }}
           FLASK_INTERNAL_PORT=${{ secrets.FLASK_INTERNAL_PORT }}
@@ -65,17 +65,17 @@ jobs:
           MONGO_DATABASE=${{ secrets.MONGO_DATABASE }}
           
           # === Docker Images ===
-          ai_assistant_production=${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:production
+          ai-assistant_production=${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:production
           EOF
           
       - name: Create dynamic inventory
         run: |
-          cd ansible-deploy_v2.0
+          cd ansible-deploy
           mkdir -p inventory
           CURRENT_USER=$(whoami)
           USER_HOME=$HOME
           cat > inventory/hosts.ini <<EOL
-          [AI_Assistant_Remote]
+          [AI-Assistant_Remote]
           localhost ansible_connection=local ansible_user=$CURRENT_USER ansible_become=false ansible_user_dir=$USER_HOME
           EOL
           echo "Inventory created for user: $CURRENT_USER"
@@ -83,26 +83,26 @@ jobs:
           
       - name: Create dynamic playbook
         run: |
-          cd ansible-deploy_v2.0
+          cd ansible-deploy
           mkdir -p playbooks
-          cat > playbooks/deploy_ai_assistant.yml <<EOL
+          cat > playbooks/deploy_ai-assistant.yml <<EOL
           ---
-          # deploy_AI_Assistant
+          # deploy_AI-Assistant
           - name: Deploy AI Assistant Service
-            hosts: AI_Assistant_Remote
-            tags: AI_Assistant_Remote
+            hosts: AI-Assistant_Remote
+            tags: AI-Assistant_Remote
             become: no
             tasks:
               - include_role:
-                  name: AI_Assistant
+                  name: AI-Assistant
                   tasks_from: staging-production-deploy.yml
           EOL
           echo "Playbook created:"
-          cat playbooks/deploy_ai_assistant.yml
+          cat playbooks/deploy_ai-assistant.yml
           
       - name: Ansible configuration
         run: |
-          cd ansible-deploy_v2.0
+          cd ansible-deploy
           cat > ansible.cfg <<EOL
           [defaults]
           interpreter_python = /usr/bin/python3
@@ -119,14 +119,14 @@ jobs:
           
       - name: Deploy with Ansible
         run: |
-          cd ansible-deploy_v2.0
+          cd ansible-deploy
           echo "Running as user: $(whoami)"
           echo "Home directory: $HOME"
-          ansible-playbook -i inventory/hosts.ini playbooks/deploy_ai_assistant.yml \
-            --tags "AI_Assistant_Remote" \
+          ansible-playbook -i inventory/hosts.ini playbooks/deploy_ai-assistant.yml \
+            --tags "AI-Assistant_Remote" \
             --tags "local_network" \
-            -e "install_dir=$HOME/services/AI_Assistant" \
+            -e "install_dir=$HOME/services/AI-Assistant" \
             -e "ansible_user_id=$(whoami)" \
             -e "ansible_user_dir=$HOME" \
-            -e "ai_assistant_environment=production"\
+            -e "ai-assistant_environment=production"\
             -v
