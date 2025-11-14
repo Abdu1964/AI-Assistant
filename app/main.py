@@ -347,7 +347,7 @@ class AiAssistance:
 
                 response_dict = {
                     "text": summary if summary else "",
-                    "json_query": json_query,
+                    "json_query": json_format,
                     "source": "annotation database"
                 }
 
@@ -749,7 +749,6 @@ class AiAssistance:
             response = {"text": str(response), "json_format": None}
         response.setdefault("text", "")
         response.setdefault("json_format", None)
-        return response  # Only text and json_format
 
         try:
             self.history.create_history(
