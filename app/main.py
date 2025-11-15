@@ -12,6 +12,7 @@ from .prompts.conversation_handler import conversation_prompt
 from .prompts.classifier_prompt import (
     classifier_prompt,
     answer_from_graph,
+    main_classifier_prompt
 )
 from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
@@ -33,6 +34,8 @@ from langchain_core.tools import tool
 import operator
 import logging
 import google.generativeai as genai
+from biogpt_agent.biogpt import biogpt_agent_function
+
 
 logger = logging.getLogger(__name__)
 log_dir = "/AI-Assistant/logfiles"
@@ -49,31 +52,6 @@ loghandle.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logger.addHandler(loghandle)
 
 load_dotenv()
-
-# Updated classifier prompt for multi-agent selection
-main_classifier_prompt = """
-Classify this user query into one or more of the following agent types. Multiple agents can handle the same query if applicable.
-
-Agent types:
-- annotation_biological: Requests to find, retrieve, or explore specific biological entities and their relationships (e.g., "find gene BRCA1", "show transcripts for TP53", "what exons does IGF1 have")
-- annotation_general: Requests for aggregate statistics, counts, or metadata about the database itself (e.g., "how many genes", "what types of variants", "database statistics")
-- galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
-- rag: General information requests, including queries about uploaded PDFs, web content, or document profiles
-
-User query: {query}
-
-Content summaries: {content_summaries}
-
-{web_context}
-
-Examples:
-- "Find gene BRCA1 and tell me about its function" → annotation_biological, rag
-- "What Galaxy tools can I use for RNA-seq?" → galaxy, rag
-- "Show me genes related to diabetes from my uploaded PDF" → annotation_biological, rag
-
-Respond ONLY with a comma-separated list of agent types that should handle this query.
-If the query clearly relates to only one agent, return just that one.
-"""
 
 
 class AgentState(TypedDict):
@@ -138,6 +116,7 @@ class AiAssistance:
         workflow.add_node("rag_agent", self._rag_agent)
         workflow.add_node("galaxy_agent", self._galaxy_agent)
         workflow.add_node("content_retrieval_agent", self._content_retrieval_agent)
+        workflow.add_node("biogpt_agent", self._biogpt_agent)
         workflow.add_node("aggregator", self._aggregate_responses)
         workflow.add_node("finalizer", self._finalize_response)
 
@@ -154,6 +133,7 @@ class AiAssistance:
                 "rag_agent": "rag_agent",
                 "galaxy_agent": "galaxy_agent",
                 "content_retrieval_agent": "content_retrieval_agent",
+                "biogpt_agent": "biogpt_agent",
                 "aggregator": "aggregator",
                 "error": "finalizer",
             },
@@ -164,7 +144,7 @@ class AiAssistance:
         workflow.add_edge("rag_agent", "aggregator")
         workflow.add_edge("galaxy_agent", "aggregator")
         workflow.add_edge("content_retrieval_agent", "aggregator")
-        
+        workflow.add_edge("biogpt_agent", "aggregator")
         # Aggregator flows to finalizer
         workflow.add_edge("aggregator", "finalizer")
         workflow.add_edge("finalizer", END)
@@ -282,6 +262,7 @@ class AiAssistance:
             "annotation_general": "annotation_agent",
             "galaxy": "galaxy_agent",
             "rag": "rag_agent",
+            "biogpt": "biogpt_agent",
         }
 
         for qtype in query_types:
@@ -563,6 +544,21 @@ class AiAssistance:
                 },
                 "error": str(e),
             }
+
+    def _biogpt_agent(self, state: AgentState) -> dict:
+        try:
+            return biogpt_agent_function(state["user_query"], state["user_id"], state["token"])
+        except Exception as e:
+            logger.error(f"Error in biogpt agent: {str(e)}", exc_info=True)
+            return {
+                "biogpt_response": {
+                    "text": f"Error: {str(e)}",
+                    "json_query": None,
+                    "source": "BioGPT"
+                },
+                "error": str(e)
+            }
+
 
     def _aggregate_responses(self, state: AgentState) -> Dict[str, Any]:
         """
