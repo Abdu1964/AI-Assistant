@@ -136,37 +136,39 @@ class GalaxyHandler:
                 return future.result()
             except RuntimeError:
                 return asyncio.run(self._handle_mcp(query,token))
-        else:
-            logger.error(f"MCP sync wrapper failed: {e}")
-            traceback.print_exc()
-            from app.prompts.rag_prompts import RETRIEVE_PROMPT
+        except:
+            try:
+                logger.error(f"MCP sync wrapper failed: {e}")
+                traceback.print_exc()
+                from app.prompts.rag_prompts import RETRIEVE_PROMPT
+                from qdrant_client import QdrantClient
 
-            GALAXY_TOOLS_RECOMMEND_COLLECTION = os.getenv("GALAXY_TOOLS_RECOMMEND_COLLECTION")
-            GALAXY_QDRANT_CLIENT = os.getenv("GALAXY_QDRANT_CLIENT")
-            
-            qdrant_url = os.environ.get(
-                "galaxy_QDRANT_CLIENT"
-            )
-            self.client = QdrantClient(
-                url=qdrant_url,
-                port=6333,
-                grpc_port=6334,
-                prefer_grpc=False,
-            )
-            embedded_text = self.embedding_model(texts)
-            result = self.client.search(
-                collection_name=USER_COLLECTION,
-                query_vector=embedding,
-                with_payload=True,
-                score_threshold=0.5,
-                limit=5)
+                GALAXY_TOOLS_RECOMMEND_COLLECTION = os.getenv("GALAXY_TOOLS_RECOMMEND_COLLECTION")
+                GALAXY_QDRANT_CLIENT = os.getenv("GALAXY_QDRANT_CLIENT")
                 
-            response = RETRIEVE_PROMPT.format(query=query,
-                                                retrieved_content=result)
-            return {"text":response}
-        except Exception as e:
-            logger.error(f"MCP sync wrapper failed: {e}")
-            traceback.print_exc()
-            return {"text": f"Error in MCP sync wrapper: {e}"}
+                qdrant_url = os.environ.get(
+                    "galaxy_QDRANT_CLIENT"
+                )
+                self.client = QdrantClient(
+                    url=qdrant_url,
+                    port=6333,
+                    grpc_port=6334,
+                    prefer_grpc=False,
+                )
+                embedded_text = self.embedding_model(query)
+                result = self.client.search(
+                    collection_name=GALAXY_TOOLS_RECOMMEND_COLLECTION,
+                    query_vector=embedded_text,
+                    with_payload=True,
+                    score_threshold=0.5,
+                    limit=5)
+                    
+                response = RETRIEVE_PROMPT.format(query=query,
+                                                    retrieved_content=result)
+                return {"text":response}
+            except Exception as e:
+                logger.error(f"MCP sync wrapper failed: {e}")
+                traceback.print_exc()
+                return {"text": f"Error in MCP sync wrapper: {e}"}
 
 
