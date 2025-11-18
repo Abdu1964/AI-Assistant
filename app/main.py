@@ -296,11 +296,11 @@ class AiAssistance:
                     f"Annotation pipeline completed successfully for user: {state['user_id']}"
                 )
                 summary = pipeline_response.get("summary", "")
-                json_query = pipeline_response.get("json_format", None)
+                json_format = pipeline_response.get("json_format", None)
 
                 response_dict = {
                     "text": summary if summary else "",
-                    "json_query": json_query if json_query is not None else None
+                    "json_format": json_format if json_format is not None else None
                 }
 
                 return {"response": response_dict}
@@ -419,10 +419,10 @@ class AiAssistance:
             f"Finalizing response for user: {state.get('user_id')}, response length: {len(str(response))}"
         )
         if not isinstance(response, dict):
-            response = {"text": str(response), "json_query": None}
+            response = {"text": str(response), "json_format": None}
         response.setdefault("text", "")
-        response.setdefault("json_query", None)
-        return response  # Only text and json_query
+        response.setdefault("json_format", None)
+        return response  # Only text and json_format
 
 
     def agent(
@@ -453,14 +453,14 @@ class AiAssistance:
             result = self.app.invoke(initial_state)
 
             # Always extract the structured response
-            response = result.get("response", {"text": "", "json_query": None})
+            response = result.get("response", {"text": "", "json_format": None})
 
             # Ensure consistent keys
             if not isinstance(response, dict):
-                response = {"text": str(response), "json_query": None}
+                response = {"text": str(response), "json_format": None}
             else:
                 response.setdefault("text", "")
-                response.setdefault("json_query", None)
+                response.setdefault("json_format", None)
 
             return response
 
@@ -632,7 +632,7 @@ class AiAssistance:
 
 
     def assistant_response(self, query, user_id, token, graph=None, graph_id=None, 
-                      files=None, resource=None, json_query=None, content_ids=None):
+                      files=None, resource=None, json_format=None, content_ids=None):
         """Simple routing logic for queries"""
         
         try:
