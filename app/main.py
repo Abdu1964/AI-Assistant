@@ -34,7 +34,7 @@ from langchain_core.tools import tool
 import operator
 import logging
 import google.generativeai as genai
-from biogpt_agent.biogpt import biogpt_agent_function
+from app.biogpt_agent.biogpt import biogpt_agent_function
 
 
 logger = logging.getLogger(__name__)
