@@ -34,7 +34,7 @@ from langchain_core.tools import tool
 import operator
 import logging
 import google.generativeai as genai
-from app.biogpt_agent.biogpt import biogpt_agent_function
+from app.biogpt_agent.biogpt import BioGPTAgent
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,7 @@ class AiAssistance:
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
         self.galaxy_handler = GalaxyHandler(advanced_llm, qdrant_client, embedding_model)
         self.embedding_model = embedding_model
+        self.biogpt = BioGPTAgent(llm=advanced_llm)
 
         logger.info(
             f"AiAssistance initialized with advanced_llm: {type(self.advanced_llm).__name__}"
@@ -547,7 +548,7 @@ class AiAssistance:
 
     def _biogpt_agent(self, state: AgentState) -> dict:
         try:
-            return biogpt_agent_function(state["user_query"], state["user_id"], state["token"])
+            return self.biogpt.biogpt_agent_function(state["user_query"], state["user_id"], state["token"])
         except Exception as e:
             logger.error(f"Error in biogpt agent: {str(e)}", exc_info=True)
             return {
