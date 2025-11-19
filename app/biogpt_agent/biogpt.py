@@ -38,18 +38,18 @@ class BioGPTAgent:
 
 
 def biogpt_agent_function(query: str, user_id: str, token: str) -> dict:
-"""
-Interface for AiAssistance._biogpt_agent
-"""
-agent = BioGPTAgent()
-answer = agent.generate_answer(query)
+    """
+    Interface for AiAssistance._biogpt_agent
+    """
+    agent = BioGPTAgent()
+    answer = agent.generate_answer(query)
 
-return {
-    "biogpt_response": {
-        "text": answer,
-        "json_query": None,
-        "source": "BioGPT"
-    },
-    "messages": [{"content": "BioGPT query processed"}]
-}
+    return {
+        "biogpt_response": {
+            "text": answer,
+            "json_query": None,
+            "source": "BioGPT"
+        },
+        "messages": [{"content": "BioGPT query processed"}]
+    }
 
