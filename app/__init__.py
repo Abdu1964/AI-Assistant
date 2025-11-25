@@ -145,7 +145,8 @@ def create_app():
     # Check for SITE_INFORMATION collection and upload sample data if needed
     try:
         try:
-            qdrant_client.client.get_collection("SITE_INFORMATION")
+            collection = os.getenv("VECTOR_COLLECTION")
+            qdrant_client.client.get_collection(collection_name=collection)
             logger.info(
                 "SITE_INFORMATION collection already exists, skipping population data"
             )
