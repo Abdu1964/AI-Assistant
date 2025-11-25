@@ -262,9 +262,9 @@ class Qdrant:
             logger.info(
                 f"Searching collection '{collection_name}' with {len(filters)} filters"
             )
-            hits = self.client.search(
+            hits = self.client.query_points(
                 collection_name=collection_name,
-                query_vector=query,
+                query=query,
                 limit=top_k,
                 query_filter=query_filter,
                 with_payload=True,
@@ -349,9 +349,9 @@ class Qdrant:
     def _retrieve_memory(self, user_id, embedding=None):
         try:
             if embedding:
-                result = self.client.search(
+                result = self.client.query_points(
                     collection_name=USER_COLLECTION,
-                    query_vector=embedding,
+                    query=embedding,
                     with_payload=True,
                     # score threshold of 0.5 will return a similiar memories with similiarity score of more than 0.5
                     score_threshold=0.5,
