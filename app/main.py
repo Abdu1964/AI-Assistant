@@ -33,12 +33,9 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.tools import tool
 import operator
 import logging
-import google.generativeai as genai
 from app.biogpt_agent.biogpt import BioGPTAgent
 
 
-logger = logging.getLogger(__name__)
-log_dir = "/AI-Assistant/logfiles"
 log_file = os.path.join(log_dir, "Assistant.log")
 logger.setLevel(logging.DEBUG)
 loghandle = loghandlers.TimedRotatingFileHandler(
@@ -53,49 +50,28 @@ logger.addHandler(loghandle)
 
 load_dotenv()
 
-# Updated classifier prompt for multi-agent selection
-main_classifier_prompt = """
-Classify this user query into one or more of the following agent types. Multiple agents can handle the same query if applicable.
-
-Agent types:
-- annotation_biological: Requests to find, retrieve, or explore specific biological entities and their relationships (e.g., "find gene BRCA1", "show transcripts for TP53", "what exons does IGF1 have")
-- annotation_general: Requests for aggregate statistics, counts, or metadata about the database itself (e.g., "how many genes", "what types of variants", "database statistics")
-- galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
-- rag: General information requests, including queries about uploaded PDFs, web content, or document profiles
-
-User query: {query}
-
-Content summaries: {content_summaries}
-
-{web_context}
-
-Examples:
-- "Find gene BRCA1 and tell me about its function" → annotation_biological, rag
-- "What Galaxy tools can I use for RNA-seq?" → galaxy, rag
-- "Show me genes related to diabetes from my uploaded PDF" → annotation_biological, rag
-
-Respond ONLY with a comma-separated list of agent types that should handle this query.
-If the query clearly relates to only one agent, return just that one.
-"""
-
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
     user_query: str
     user_id: str
     token: str
-    query_types: List[str]  # Changed to list for multiple types
+    query_types: List[str]
     response: Dict[str, Any]
     error: str
     content_ids: Optional[List[str]]
     graph_id: Optional[str]
     files: Optional[List[str]]
+    resource: Optional[str]
     pipeline_details: Dict[str, Any]
     # Agent-specific responses with source attribution
     annotation_response: Optional[Dict[str, Any]]
     rag_response: Optional[Dict[str, Any]]
     galaxy_response: Optional[Dict[str, Any]]
     content_retrieval_response: Optional[Dict[str, Any]]
+    # Parallel execution control
+    agents_to_run: List[str]
+    agents_completed: Annotated[List[str], operator.add]
 
 
 class AiAssistance:
@@ -130,15 +106,16 @@ class AiAssistance:
         self.app = self.workflow.compile()
 
     def _create_workflow(self) -> StateGraph:
-        """Create the LangGraph workflow with parallel agent execution"""
+        """Create the LangGraph workflow with proper parallel agent execution"""
         logger.info("Creating LangGraph workflow with parallel agent execution")
 
         workflow = StateGraph(AgentState)
 
         # Add nodes
         workflow.add_node("classifier", self._classify_query)
+        workflow.add_node("router", self._router)
+        workflow.add_node("_hypothesis_agent", self._hypothesis_agent)
         workflow.add_node("annotation_agent", self._annotation_agent)
-        # workflow.add_node("hypothesis_agent", self._hypothesis_agent)
         workflow.add_node("rag_agent", self._rag_agent)
         workflow.add_node("galaxy_agent", self._galaxy_agent)
         workflow.add_node("content_retrieval_agent", self._content_retrieval_agent)
@@ -148,20 +125,20 @@ class AiAssistance:
 
         # Define edges
         workflow.set_entry_point("classifier")
+        workflow.add_edge("classifier", "router")
 
-        # Conditional routing to multiple agents in parallel
+        # Router decides which agents to invoke
         workflow.add_conditional_edges(
-            "classifier",
-            self._route_query,
+            "router",
+            self._should_run_agent,
             {
                 "annotation_agent": "annotation_agent",
-                # "hypothesis": "hypothesis_agent",
+                "hypothesis_agent": "_hypothesis_agent",
                 "rag_agent": "rag_agent",
                 "galaxy_agent": "galaxy_agent",
                 "content_retrieval_agent": "content_retrieval_agent",
                 "biogpt_agent": "biogpt_agent",
                 "aggregator": "aggregator",
-                "error": "finalizer",
             },
         )
 
@@ -241,7 +218,6 @@ class AiAssistance:
         
         # Parse response to get multiple query types
         query_types = []
-        # Clean up response and split by comma
         cleaned_response = response.replace("and", ",").replace("\n", ",")
         potential_types = [t.strip() for t in cleaned_response.split(",")]
         
@@ -254,6 +230,8 @@ class AiAssistance:
                 query_types.append("galaxy")
             elif "rag" in qtype:
                 query_types.append("rag")
+            elif "hypothesis_generation":
+                query_types.append("_hypothesis_agent")
         
         # Remove duplicates
         query_types = list(set(query_types))
@@ -264,27 +242,17 @@ class AiAssistance:
 
         logger.info(f"Query classified as: {query_types}")
 
-        return {
-            "query_types": query_types,
-            "messages": [HumanMessage(content=f"Query classified as: {', '.join(query_types)}")],
-        }
-
-    def _route_query(self, state: AgentState) -> List[str]:
-        """Route query to appropriate agents (can be multiple for parallel execution)"""
-        query_types = state.get("query_types", ["rag"])
-        content_ids = state.get("content_ids")
-        files = state.get("files")
-        graph_id = state.get("graph_id")
+        # Determine which agents need to run
+        agents_to_run = []
         
-        routes = []
-
         # Add content retrieval agent if any content references exist
         if content_ids or files or graph_id:
-            routes.append("content_retrieval_agent")
+            agents_to_run.append("content_retrieval_agent")
 
         # Map query types to agent routes
         type_to_agent = {
             "annotation_biological": "annotation_agent",
+            "hypothesis_generation": "_hypothesis_agent",
             "annotation_general": "annotation_agent",
             "galaxy": "galaxy_agent",
             "rag": "rag_agent",
@@ -293,24 +261,43 @@ class AiAssistance:
 
         for qtype in query_types:
             agent = type_to_agent.get(qtype)
-            if agent and agent not in routes:
-                routes.append(agent)
+            if agent and agent not in agents_to_run:
+                agents_to_run.append(agent)
 
-        # Ensure we have at least one route
-        if not routes:
-            routes.append("rag_agent")
+        # Ensure we have at least one agent
+        if not agents_to_run:
+            agents_to_run.append("rag_agent")
 
-        # If we have multiple agents, they'll run in parallel before aggregation
-        if len(routes) > 1:
-            logger.info(f"Routing query to multiple agents in parallel: {routes}")
-            # Return all routes - LangGraph will handle parallel execution
-            return routes
-        elif routes:
-            logger.info(f"Routing query to single agent: {routes[0]}")
-            return routes[0]
-        else:
-            # Fallback to aggregator if no specific agents
-            return "aggregator"
+        logger.info(f"Agents to run: {agents_to_run}")
+
+        return {
+            "query_types": query_types,
+            "agents_to_run": agents_to_run,
+            "agents_completed": [],
+            "messages": [HumanMessage(content=f"Query classified as: {', '.join(query_types)}")],
+        }
+
+    def _router(self, state: AgentState) -> Dict[str, Any]:
+        """Router node that doesn't change state, just passes through"""
+        return {}
+
+    def _should_run_agent(self, state: AgentState) -> str:
+        """
+        Determine which agent to run next.
+        Returns the next agent to run, or 'aggregator' if all agents have completed.
+        """
+        agents_to_run = state.get("agents_to_run", [])
+        agents_completed = state.get("agents_completed", [])
+        
+        # Find the next agent that hasn't been completed
+        for agent in agents_to_run:
+            if agent not in agents_completed:
+                logger.info(f"Running next agent: {agent}")
+                return agent
+        
+        # All agents completed, move to aggregator
+        logger.info("All agents completed, moving to aggregator")
+        return "aggregator"
 
     def _annotation_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle annotation-related queries"""
@@ -343,7 +330,7 @@ class AiAssistance:
             
             if pipeline_response.get("success", False):
                 summary = pipeline_response.get("summary", "")
-                json_format = pipeline_response.get("json_format", None)
+                json_query = pipeline_response.get("json_format", None)
 
                 response_dict = {
                     "text": summary if summary else "",
@@ -353,6 +340,7 @@ class AiAssistance:
 
                 return {
                     "annotation_response": response_dict,
+                    "agents_completed": ["annotation_agent"],
                     "messages": [AIMessage(content="Annotation processing completed")]
                 }
             else:
@@ -364,6 +352,7 @@ class AiAssistance:
                         "json_query": None,
                         "source": "annotation database"
                     },
+                    "agents_completed": ["annotation_agent"],
                     "error": error_msg,
                 }
 
@@ -375,14 +364,15 @@ class AiAssistance:
                     "json_query": None,
                     "source": "annotation database"
                 },
+                "agents_completed": ["annotation_agent"],
                 "error": str(e),
             }
-    # def _hypothesis_agent(self, state: AgentState) -> Dict[str, Any]:
-    #     """Handle hypothesis generation queries"""
-    #     logger.info(
-    #         f"Hypothesis agent processing query: {state['user_query']} for user: {state['user_id']}"
-    #     )
-    #     try:
+    def _hypothesis_agent(self, state: AgentState) -> Dict[str, Any]:
+        """Handle hypothesis generation queries"""
+        logger.info(
+            f"Hypothesis agent processing query: {state['user_query']} for user: {state['user_id']}"
+        )
+        try:
     #         emit_to_user(user=state["user_query"], message="Generating hypothesis...")
     #         response = self.hypothesis_generation.generate_hypothesis(
     #             token=state["token"],
@@ -394,15 +384,16 @@ class AiAssistance:
         #         "response": response,
         #         "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
         #     }
-        # except Exception as e:
-        #     logger.error("Error in hypothesis agent", exc_info=True)
-        #     return {
-        #         "response": f"Error generating hypothesis: {str(e)}",
-        #         "error": str(e),
-        #         "messages": [
-        #             AIMessage(content=f"Error in hypothesis generation: {str(e)}")
-        #         ],
-        #     }
+            return {"text": "Hypothesis generation agent is under development.",}
+        except Exception as e:
+            logger.error("Error in hypothesis agent", exc_info=True)
+            return {
+                "response": f"Error generating hypothesis: {str(e)}",
+                "error": str(e),
+                "messages": [
+                    AIMessage(content=f"Error in hypothesis generation: {str(e)}")
+                ],
+            }
 
 
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
@@ -432,6 +423,7 @@ class AiAssistance:
                     "json_query": None,
                     "source": "knowledge base"
                 },
+                "agents_completed": ["rag_agent"],
                 "messages": [AIMessage(content="RAG query processed")],
             }
             
@@ -443,6 +435,7 @@ class AiAssistance:
                     "json_query": None,
                     "source": "knowledge base"
                 },
+                "agents_completed": ["rag_agent"],
                 "error": str(e),
             }
 
@@ -476,6 +469,7 @@ class AiAssistance:
                     "json_query": None,
                     "source": "Galaxy platform"
                 },
+                "agents_completed": ["galaxy_agent"],
                 "messages": [AIMessage(content="Galaxy query processed")],
             }
             
@@ -487,6 +481,7 @@ class AiAssistance:
                     "json_query": None,
                     "source": "Galaxy platform"
                 },
+                "agents_completed": ["galaxy_agent"],
                 "error": str(e),
             }
 
@@ -512,7 +507,20 @@ class AiAssistance:
             # Graph summary
             if graph_id:
                 logger.info(f"Retrieving graph summary for graph_id: {graph_id}")
-                graph_summary = self.graph_summarizer.summary(query=query, graph_id=graph_id, token=token,resource=resource)
+                graph_summary = self.answer_from_graph_summaries(
+                    query=query, 
+                    user_id=user_id,
+                    graph_id=graph_id, 
+                    token=token, 
+                    resource=resource
+                )
+                if graph_summary:
+                    graph_text = graph_summary.get("text", str(graph_summary)) if isinstance(graph_summary, dict) else str(graph_summary)
+                    content_parts.append({
+                        "source": f"graph:{graph_id}",
+                        "content": graph_text
+                    })
+                    sources.append(f"graph:{graph_id}")
 
             # Galaxy files
             if files:
@@ -544,7 +552,7 @@ class AiAssistance:
             # Build response with source attribution
             if content_parts:
                 response_dict = {
-                    "text": content_parts,  # Keep structured format
+                    "text": content_parts,
                     "json_query": None,
                     "sources": sources
                 }
@@ -557,6 +565,7 @@ class AiAssistance:
 
             return {
                 "content_retrieval_response": response_dict,
+                "agents_completed": ["content_retrieval_agent"],
                 "messages": [AIMessage(content="Content retrieval completed")]
             }
 
@@ -568,6 +577,7 @@ class AiAssistance:
                     "json_query": None,
                     "sources": []
                 },
+                "agents_completed": ["content_retrieval_agent"],
                 "error": str(e),
             }
 
@@ -601,7 +611,6 @@ class AiAssistance:
         # ---------------- Annotation Agent ----------------
         annotation_resp = state.get("annotation_response")
         if annotation_resp:
-            # Prefer 'text', then 'summary'
             text_content = annotation_resp.get("text") or annotation_resp.get("summary") or ""
             if text_content:
                 agent_outputs.append({
@@ -611,7 +620,7 @@ class AiAssistance:
                 })
 
             # Capture JSON structured data
-            json_query = annotation_resp.get("json_query") or annotation_resp.get("json_format")
+            json_query = annotation_resp.get("json_query")
 
             # Add placeholder if only JSON exists
             if json_query and not text_content:
@@ -696,20 +705,21 @@ class AiAssistance:
                 json_note = "\n\nNote: Structured annotation data is also available for this query."
 
             prompt = f"""You are an AI assistant acting as a **final aggregator**. 
-    Your task is to respond to the user's query: "{user_query}".
+Your task is to respond to the user's query: "{user_query}".
 
-    You have outputs from multiple agents, which may provide overlapping, complementary, or missing information.
+You have outputs from multiple agents, which may provide overlapping, complementary, or missing information.
 
-    Information from agents:
-    {combined_text}{json_note}
+Information from agents:
+{combined_text}{json_note}
 
-    Write a **single, fluent, and conversational summary**:
-    - Integrate all findings naturally into one flowing explanation.
-    - Reference sources naturally (e.g., "Based on the annotation database..." or "From the knowledge base...").
-    - Highlight conflicts if any.
-    - Keep it helpful, informative, and readable.
-    - Acknowledge structured annotation data if available.
-    """
+Write a **single, fluent, and conversational summary**:
+- Integrate all findings naturally into one flowing explanation.
+- Reference sources naturally (e.g., "Based on the annotation database..." or "From the knowledge base...").
+- Highlight conflicts if any.
+- Keep it helpful, informative, and readable.
+- Acknowledge structured annotation data if available.
+- if nothing is provide Do not make up information always respond with the responses from the.
+"""
 
             aggregated_text = self.advanced_llm.generate(prompt)
             logger.info(f"Successfully aggregated response: {aggregated_text[:100]}...")
@@ -746,7 +756,7 @@ class AiAssistance:
         
         # Ensure response has correct structure
         if not isinstance(response, dict):
-            response = {"text": str(response), "json_format": None}
+            response = {"text": str(response), "json_query": None}
         response.setdefault("text", "")
         response.setdefault("json_format", None)
 
@@ -793,12 +803,14 @@ class AiAssistance:
                 "content_ids": content_ids,
                 "graph_id": graph_id,
                 "files": files,
+                "resource": resource,
                 "pipeline_details": {},
                 "annotation_response": None,
                 "rag_response": None,
                 "galaxy_response": None,
                 "content_retrieval_response": None,
-                "resource": resource,
+                "agents_to_run": [],
+                "agents_completed": [],
             }
 
             # Run the workflow
@@ -808,10 +820,10 @@ class AiAssistance:
             response = result.get("response", {"text": "", "json_format": None})
             # Ensure consistent structure
             if not isinstance(response, dict):
-                response = {"text": str(response), "json_format": None}
+                response = {"text": str(response), "json_query": None}
             else:
                 response.setdefault("text", "")
-                response.setdefault("json_format", None)
+                response.setdefault("json_query", None)
 
             logger.info(f"Agent completed successfully for user: {user_id}")
             return response
@@ -825,6 +837,7 @@ class AiAssistance:
             emit_to_user(user=user_id, message=error_response, status="error")
             return error_response
 
+    
     def assistant_response(
         self, 
         query: str, 
@@ -844,9 +857,7 @@ class AiAssistance:
                 f"Assistant response called with query={query}, user_id={user_id}, "
                 f"graph_id={graph_id}, content_ids={content_ids}, files={files}"
             )
-            logger.info(
-            f"Assistant called with query: {query}, user_id: {user_id}"
-            )
+            
             try:
                 user_information = self.store.get_context_and_memory(user_id)
                 history = []
@@ -894,6 +905,9 @@ class AiAssistance:
                         user_id,
                         token,
                         content_ids=content_ids,
+                        graph_id=graph_id,
+                        files=files,
+                        resource=resource,
                     )
                     if isinstance(agent_response, str):
                         agent_response = {"text": agent_response}
@@ -908,7 +922,6 @@ class AiAssistance:
                         else None
                     )
 
-                    response_resource = None
                     if resource_type:
                         logger.info(f"Here is the resource successfully made {resource_type}")
 
@@ -932,7 +945,7 @@ class AiAssistance:
                     "I apologize, but I encountered an error while processing your request."
                 )
                 emit_to_user(user=user_id, message={"text": error_msg}, status="completed")
-                return {"text": error_msg}, history
+                return {"text": error_msg}
           
         except Exception as e:
             logger.error(f"Error in assistant_response: {e}", exc_info=True)
@@ -941,7 +954,6 @@ class AiAssistance:
                 "json_query": None
             }
 
-          
     def answer_from_graph_summaries(self, query, user_id, resource, token, graph_id):
         """Legacy method for backward compatibility"""
         logger.info(
@@ -965,6 +977,13 @@ class AiAssistance:
                 emit_to_user(user=user_id, message="Analyzing...")
             else:
                 return "Invalid resource type specified."
+                
+            # Return summary as dict for consistency
+            return {"text": summary_text, "json_query": None}
+            
         except Exception as e:
-            logger.error("Error in agent processing", exc_info=True)
-            return f"Error processing query: {str(e)}"
+            logger.error("Error in answer_from_graph_summaries", exc_info=True)
+            return {
+                "text": f"Error processing query: {str(e)}",
+                "json_query": None
+            }
