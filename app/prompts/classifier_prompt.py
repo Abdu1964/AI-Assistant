@@ -72,7 +72,7 @@ Example 3 (RELATED - general explanation request):
 - Output: "related: BTBD3 network showing basic connectivity with two source nodes on chromosome 20."
 """
 
-main_classifier_prompt = main_classifier_prompt = """
+main_classifier_prompt = """
 Classify this user query into one or more of the following agent types. Multiple agents can handle the same query if applicable.
 
 Agent types:
@@ -96,3 +96,4 @@ Examples:
 Respond ONLY with a comma-separated list of agent types that should handle this query.
 If the query clearly relates to only one agent, return just that one.
 """
+
