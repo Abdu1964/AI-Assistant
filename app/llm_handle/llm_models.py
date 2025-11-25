@@ -1,4 +1,3 @@
-import google.generativeai as genai
 from dotenv import load_dotenv
 import openai
 import time
@@ -6,7 +5,9 @@ import os
 import logging
 import json
 from typing import Any, Dict
+from typing import Any, Dict
 from sentence_transformers import SentenceTransformer
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 
 
 logging.basicConfig(
@@ -63,13 +64,12 @@ def gemini_embedding_model(batch):
             f"Embedding batch {i // batch_size + 1} of {len(batch) // batch_size + 1}"
         )
 
-        genai.configure(api_key=gemini_api)
         try:
-            response = genai.embed_content(
-                model=GEMINI_EMBEDDING_MODEL, content=batch_segment
-            )
-            batch_embeddings = response["embedding"]
-            embeddings.extend(batch_embeddings)
+            embeddings_model = GoogleGenerativeAIEmbeddings(
+            model="models/text-embedding-004",
+            google_api_key=gemini_api)
+            response = embeddings_model.embed_documents(batch)
+            embeddings.extend(response["embedding"])
 
         except Exception as e:
             logger.error(f"An unexpected error occurred: {e}")
@@ -77,11 +77,8 @@ def gemini_embedding_model(batch):
 
     return embeddings
 
-
 # Load the SentenceTransformer model once at module level
 model = SentenceTransformer("all-MiniLM-L6-v2")
-
-
 # Function to generate sentence transformers embeddings
 def sentence_transformer_embedding_model(batch):
     return model.encode(batch, convert_to_numpy=True).tolist()
@@ -126,23 +123,23 @@ class LLMInterface:
         raise NotImplementedError("Subclasses must implement the generate method")
 
 
+
 class GeminiModel(LLMInterface):
-    def __init__(self, api_key: str, model_provider, model_name="gemini-pro"):
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(model_name or "gemini-pro")
-        self.model_name = model_name
-        self.model_provider = model_provider
-        self.api_key = api_key
-
-    def generate(
-        self, prompt: str, system_prompt=None, temperature=0.0, top_k=1
-    ) -> Dict[str, Any]:
-        response = self.model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(temperature=0, top_k=top_k),
+    def __init__(self, api_key: str, model_provider, model_name="gemini-2.5-flash"):
+        self.model = ChatGoogleGenerativeAI(
+            model=model_name,
+            api_key=api_key,
+            temperature=0,
         )
+        self.model_provider = model_provider
+    def generate(self, prompt: str, system_prompt=None, top_k=1) -> Dict[str, Any]:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
 
-        content = response.text
+        response = self.model.invoke(messages)
+        content = getattr(response, "content", response)
 
         json_content = self._extract_json_from_codeblock(content)
         try:
@@ -154,10 +151,8 @@ class GeminiModel(LLMInterface):
         start = content.find("```json")
         end = content.rfind("```")
         if start != -1 and end != -1:
-            json_content = content[start + 7 : end].strip()
-            return json_content
-        else:
-            return content
+            return content[start + 7 : end].strip()
+        return content
 
 
 class OpenAIModel(LLMInterface):
