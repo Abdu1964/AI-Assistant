@@ -347,17 +347,8 @@ class AiAssistance:
 
                 response_dict = {
                     "text": summary if summary else "",
-<<<<<<< HEAD
-<<<<<<< HEAD
                     "json_query": json_query,
                     "source": "annotation database"
-=======
-                    "json_format": json_format if json_format is not None else None
->>>>>>> d6f261f (quick fix : return parameter)
-=======
-                    "json_query": json_query,
-                    "source": "annotation database"
->>>>>>> 1e28456 (multi agent strucuture intiated)
                 }
 
                 return {
@@ -580,7 +571,6 @@ class AiAssistance:
                 "error": str(e),
             }
 
-<<<<<<< HEAD
     def _biogpt_agent(self, state: AgentState) -> dict:
         try:
             return self.biogpt.biogpt_agent_function(state["user_query"], state["user_id"], state["token"])
@@ -596,8 +586,6 @@ class AiAssistance:
             }
 
 
-=======
->>>>>>> 1e28456 (multi agent strucuture intiated)
     def _aggregate_responses(self, state: AgentState) -> Dict[str, Any]:
         """
         Aggregate responses from all agents with source attribution.
@@ -758,28 +746,10 @@ class AiAssistance:
         
         # Ensure response has correct structure
         if not isinstance(response, dict):
-<<<<<<< HEAD
-<<<<<<< HEAD
-            response = {"text": str(response), "json_query": None}
-        
-        response.setdefault("text", "")
-        response.setdefault("json_query", None)
-        
-        # Save to history
-=======
             response = {"text": str(response), "json_format": None}
         response.setdefault("text", "")
         response.setdefault("json_format", None)
         return response  # Only text and json_format
->>>>>>> d6f261f (quick fix : return parameter)
-=======
-            response = {"text": str(response), "json_query": None}
-        
-        response.setdefault("text", "")
-        response.setdefault("json_query", None)
-        
-        # Save to history
->>>>>>> 1e28456 (multi agent strucuture intiated)
 
         try:
             self.history.create_history(
@@ -835,19 +805,8 @@ class AiAssistance:
             # Run the workflow
             result = self.app.invoke(initial_state)
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-            # Extract the final response
-            response = result.get("response", {"text": "", "json_query": None})
-=======
             # Always extract the structured response
             response = result.get("response", {"text": "", "json_format": None})
->>>>>>> d6f261f (quick fix : return parameter)
-=======
-            # Extract the final response
-            response = result.get("response", {"text": "", "json_query": None})
->>>>>>> 1e28456 (multi agent strucuture intiated)
-
             # Ensure consistent structure
             if not isinstance(response, dict):
                 response = {"text": str(response), "json_format": None}
