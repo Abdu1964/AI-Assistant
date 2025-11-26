@@ -12,7 +12,7 @@ import requests
 import trafilatura
 from pathlib import Path
 from typing import List, Dict, Optional
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters.character import RecursiveCharacterTextSplitter
 from qdrant_client import models
 from app.llm_handle.llm_models import get_llm_model
 
