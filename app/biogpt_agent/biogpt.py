@@ -37,19 +37,12 @@ class BioGPTAgent:
             return f"Error generating biological answer: {str(e)}"
 
 
-def biogpt_agent_function(query: str, user_id: str, token: str) -> dict:
-    """
-    Interface for AiAssistance._biogpt_agent
-    """
-    agent = BioGPTAgent()
-    answer = agent.generate_answer(query)
-
-    return {
-        "biogpt_response": {
-            "text": answer,
-            "json_query": None,
-            "source": "BioGPT"
-        },
-        "messages": [{"content": "BioGPT query processed"}]
-    }
-
+    def biogpt_agent_function(self, query: str, user_id: str, token: str) -> dict:
+        """
+        Interface for AiAssistance._biogpt_agent
+        """
+        try:
+            agent = BioGPTAgent()
+            answer = agent.generate_answer(query)
+        except Exception as e:
+            return f"Error generating biological answer"
