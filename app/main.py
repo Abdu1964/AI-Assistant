@@ -20,6 +20,7 @@ from .storage.history_manager import HistoryManager
 from .storage.mongo_storage import mongo_db_manager
 from .socket_manager import emit_to_user
 from .Galaxy_integration.galaxy import GalaxyHandler
+from .biogpt_agent.biogpt import BioGPTAgent
 import asyncio
 import logging.handlers as loghandlers
 from dotenv import load_dotenv
@@ -69,6 +70,7 @@ class AgentState(TypedDict):
     rag_response: Optional[Dict[str, Any]]
     galaxy_response: Optional[Dict[str, Any]]
     content_retrieval_response: Optional[Dict[str, Any]]
+    biogpt_response:Optional[Dict[str, Any]]
     # Parallel execution control
     agents_to_run: List[str]
     agents_completed: Annotated[List[str], operator.add]
@@ -139,6 +141,7 @@ class AiAssistance:
                 "content_retrieval_agent": "content_retrieval_agent",
                 "biogpt_agent": "biogpt_agent",
                 "aggregator": "aggregator",
+                "error" : "finalizer"
             },
         )
 
@@ -583,18 +586,23 @@ class AiAssistance:
 
     def _biogpt_agent(self, state: AgentState) -> dict:
         try:
-            return self.biogpt.biogpt_agent_function(state["user_query"], state["user_id"], state["token"])
+            response = self.biogpt.biogpt_agent_function(state["user_query"], state["user_id"], state["token"])
+            return {
+                "biogpt_response" : {
+                    "text":response,
+                    "source" :"Biogpt"
+                    }
+                }
         except Exception as e:
             logger.error(f"Error in biogpt agent: {str(e)}", exc_info=True)
             return {
                 "biogpt_response": {
-                    "text": f"Error: {str(e)}",
+                    "text":None,
                     "json_query": None,
                     "source": "BioGPT"
                 },
                 "error": str(e)
             }
-
 
     def _aggregate_responses(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -649,6 +657,16 @@ class AiAssistance:
                 agent_outputs.append({
                     "agent": "galaxy_agent",
                     "source": galaxy_resp.get("source", "Galaxy platform"),
+                    "content": text_content
+                })
+
+        biogpt_resp = state.get("biogpt_response")
+        if biogpt_resp:
+            text_content = biogpt_resp.get("text", "")
+            if text_content:
+                agent_outputs.append({
+                    "agent": "biogpt_agent",
+                    "source": biogpt_resp.get("source", "biogpt"),
                     "content": text_content
                 })
 
@@ -808,6 +826,7 @@ Write a **single, fluent, and conversational summary**:
                 "annotation_response": None,
                 "rag_response": None,
                 "galaxy_response": None,
+                "biogpt_response":None,
                 "content_retrieval_response": None,
                 "agents_to_run": [],
                 "agents_completed": [],
