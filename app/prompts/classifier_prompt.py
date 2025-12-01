@@ -72,17 +72,27 @@ Example 3 (RELATED - general explanation request):
 - Output: "related: BTBD3 network showing basic connectivity with two source nodes on chromosome 20."
 """
 
-main_classifier_prompt = """
-Classify this query into one of these categories:
+main_classifier_prompt = main_classifier_prompt = """
+Classify this user query into one or more of the following agent types. Multiple agents can handle the same query if applicable.
+
+Agent types:
 - annotation_biological: Requests to find, retrieve, or explore specific biological entities and their relationships (e.g., "find gene BRCA1", "show transcripts for TP53", "what exons does IGF1 have")
-- annotation_general: Requests for aggregate statistics, counts, or metadata about the database itself (e.g., "how many", "what types", "database statistics", "total count")
-- hypothesis: Requests for Generation of a hypothesis graph on variant and phenotypes mentioned
+- annotation_general: Requests for aggregate statistics, counts, or metadata about the database itself (e.g., "how many genes", "what types of variants", "database statistics")
 - galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
 - rag: General information requests, including queries about uploaded PDFs, web content, or document profiles
+- biogpt: Common biological questions that can be answered by BioGPT
 
 User query: {query}
+
 Content summaries: {content_summaries}
+
 {web_context}
 
-Respond ONLY with the category name.
+Examples:
+- "Find gene BRCA1 and tell me about its function" → annotation_biological, rag
+- "What Galaxy tools can I use for RNA-seq?" → galaxy, rag
+- "Show me genes related to diabetes from my uploaded PDF" → annotation_biological, rag
+
+Respond ONLY with a comma-separated list of agent types that should handle this query.
+If the query clearly relates to only one agent, return just that one.
 """

@@ -7,9 +7,6 @@ Your PRIMARY role is to determine whether to:
 CONTEXT INPUTS (include only if available):
 - User's research memories: {memory}
 - Recent conversation context: {conversation_history}
-- Graph summaries: {graph_summary}
-- Responses from uploaded content: {response_from_content}
-- Files / Galaxy outputs: {files_response}
 - Current query: {query}
 
 AGENT DESCRIPTIONS:
