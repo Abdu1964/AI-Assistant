@@ -5,9 +5,8 @@ import traceback
 import json
 import os
 from app.rag.utils.tts_utils import tts_manager
-from app.storage.mongo_storage import mongo_db_manager
 from app.storage.redis import redis_manager
-from app.storage.history_manager import HistoryManager
+from app.storage.mongo_storage import mongo_db_manager
 
 load_dotenv()
 main_bp = Blueprint("main", __name__)
@@ -336,7 +335,7 @@ def clear_user_data(current_user_id, auth_token):
             mongo_db_manager.delete_content_file(user_id, content.get("content_id"))
 
         # Clear conversation history
-        HistoryManager().clear_user_history(user_id)
+        mongo_db_manager.clear_user_history(user_id)
 
         # Clear Qdrant collection for this user
         try:
@@ -476,8 +475,8 @@ def get_query_audio(current_user_id, auth_token):
             )
             return Response(audio_data, mimetype="audio/mpeg")
 
-        # Get the specific conversation entry by query_id using HistoryManager
-        entry = HistoryManager().get_entry_by_query_id(user_id, query_id)
+        # Get the specific conversation entry by query_id
+        entry = mongo_db_manager.get_entry_by_query_id(user_id, query_id)
 
         if not entry:
             return jsonify(error="Query not found in history"), 404
@@ -514,7 +513,7 @@ def get_user_history(current_user_id, auth_token):
         data = request.form
         user_id = data.get("user_id") or current_user_id
 
-        history = HistoryManager().retrieve_user_history(user_id)
+        history = mongo_db_manager.retrieve_user_history(user_id)
 
         return jsonify(history), 200
     except Exception as e:
@@ -530,7 +529,7 @@ def clear_user_history(current_user_id, auth_token):
         data = request.form
         user_id = data.get("user_id") or current_user_id
 
-        HistoryManager().clear_user_history(user_id)
+        mongo_db_manager.clear_user_history(user_id)
 
         return jsonify(message="History cleared successfully"), 200
     except Exception as e:

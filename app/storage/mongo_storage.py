@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 class MongoManager:
+    """Unified MongoDB manager for user information, content files, and history."""
+    
     def __init__(self):
         self.client = None
         self.db = None
@@ -19,7 +21,7 @@ class MongoManager:
         self._create_indexes()
 
     def _connect(self):
-        # Initialize MongoDB connection
+        """Initialize MongoDB connection"""
         try:
             mongo_uri = os.getenv("MONGO_URL")
             database_name = os.getenv("MONGO_DATABASE", "ai_assistant")
@@ -35,7 +37,7 @@ class MongoManager:
             raise
 
     def _create_indexes(self):
-        # Create necessary indexes for performance
+        """Create necessary indexes for performance"""
         try:
             # User information indexes
             self.user_info_collection.create_index("user_id")
@@ -52,15 +54,23 @@ class MongoManager:
         except Exception as e:
             logger.error(f"Error creating MongoDB indexes: {e}")
 
-    # User Information Methods
-    def create_user_information(
-        self,
-        user_id: str,
-        user_question: str,
-        memory: dict = None,
-        context: dict = None,
+    # ==================== CONVERSATION HISTORY METHODS ====================
+    
+    def create_history(
+        self, 
+        user_id: str, 
+        user_message: str, 
+        assistant_answer: str, 
         graph_id_referenced: str = None,
+        content_ids: list = None,
+        files: list = None,
+        agents_used: list = None,
+
     ):
+        """
+        Create a conversation history entry with both question and answer.
+        This is the main method for saving conversations.
+        """
         try:
             # Clean old records (keep only 3 most recent)
             self._clean_old_user_records(user_id)
@@ -68,46 +78,94 @@ class MongoManager:
             user_info = {
                 "user_id": user_id,
                 "question_id": str(uuid.uuid4()),
-                "user_question": user_question,
-                "memory": json.dumps(memory) if memory else None,
-                "context": json.dumps(context) if context else None,
+                "user_question": user_message,
+                "assistant_answer": assistant_answer,
                 "graph_id_referenced": graph_id_referenced,
+                "content_ids":content_ids,
+                "files":files,
+                "agents_used": agents_used,
+                "memory": None,
+                "context": None,
                 "time": datetime.utcnow(),
-                "assistant_answer": None,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
             }
 
             result = self.user_info_collection.insert_one(user_info)
-            user_info["_id"] = result.inserted_id
-            return user_info
+            logger.info(f"Created history with question_id: {user_info['question_id']}")
+            
+            return user_info.get("question_id")
 
         except Exception as e:
-            logger.error(f"Error creating user information: {e}")
-            raise
+            logger.error(f"Error creating history: {e}")
+            return None
 
-    def get_user_information(self, user_id: str, limit: int = 10):
+    def retrieve_user_history(self, user_id: str, limit: int = 5):
+        """Retrieve user conversation history"""
         try:
             cursor = (
                 self.user_info_collection.find({"user_id": user_id})
-                .sort("time", 1)
+                .sort("time", -1)  # Most recent first
                 .limit(limit)
             )
+            records = list(cursor)
+            
+            history = []
+            for record in records:
+                history.append({
+                    "query_id": record.get("question_id"),
+                    "user": record.get("user_question"),
+                    "assistant_answer": record.get("assistant_answer"),
+                    "graph_id_referenced": record.get("graph_id_referenced"),
+                    "time": (
+                        record.get("time").isoformat() if record.get("time") else None
+                    ),
+                })
+            
+            return {str(user_id): history}
 
-            return list(cursor)
         except Exception as e:
-            logger.error(f"Error retrieving user information: {e}")
-            return []
+            logger.error(f"Error retrieving user history: {e}")
+            return {str(user_id): []}
+
+    def get_entry_by_query_id(self, user_id: str, query_id: str):
+        """Get a specific history entry by query ID"""
+        try:
+            record = self.user_info_collection.find_one(
+                {"user_id": user_id, "question_id": query_id}
+            )
+
+            if record:
+                return {
+                    "query_id": record.get("question_id"),
+                    "user": record.get("user_question"),
+                    "assistant_answer": record.get("assistant_answer"),
+                    "graph_id_referenced": record.get("graph_id_referenced"),
+                    "time": record.get("time").isoformat() if record.get("time") else None,
+                }
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting entry by query ID: {e}")
+            return None
+
+    def clear_user_history(self, user_id: str):
+        """Clear all history for a user"""
+        try:
+            result = self.user_info_collection.delete_many({"user_id": user_id})
+            logger.info(f"Cleared {result.deleted_count} history records for user {user_id}")
+            return result.deleted_count
+        except Exception as e:
+            logger.error(f"Error clearing user history: {e}")
+            return 0
 
     def _clean_old_user_records(self, user_id: str):
-        # Keep only 3 most recent records per user
+        """Keep only 3 most recent records per user"""
         try:
-            # Get all records for user, sorted by time descending
             all_records = list(
                 self.user_info_collection.find({"user_id": user_id}).sort("time", -1)
             )
 
-            # Delete records beyond the 3rd one (keep only the 3 most recent)
             if len(all_records) > 3:
                 records_to_delete = all_records[3:]
                 for record in records_to_delete:
@@ -119,30 +177,66 @@ class MongoManager:
         except Exception as e:
             logger.error(f"Error cleaning old user records: {e}")
 
-    def update_user_information(
-        self, question_id: str, memory: dict = None, context: dict = None
-    ):
-        # Update user information by question_id
+    def get_context_and_memory(self, user_id: str):
+        """
+        Get context and memory for a user (used for conversation context).
+        Returns recent conversation history in a specific format.
+        """
         try:
-            update_data = {"updated_at": datetime.utcnow()}
-            if memory is not None:
-                update_data["memory"] = json.dumps(memory)
-            if context is not None:
-                update_data["context"] = json.dumps(context)
-
-            result = self.user_info_collection.update_one(
-                {"question_id": question_id}, {"$set": update_data}
+            cursor = (
+                self.user_info_collection.find({"user_id": user_id})
+                .sort("time", 1)
+                .limit(10)
             )
+            records = list(cursor)
+            result = []
 
-            if result.modified_count > 0:
-                return self.user_info_collection.find_one({"question_id": question_id})
-            return None
+            for record in records:
+                question = record.get("user_question", "")
+                
+                # Parse context if exists
+                context = None
+                if record.get("context"):
+                    try:
+                        context_data = json.loads(record["context"])
+                        if "content" in context_data:
+                            content = context_data["content"]
+                            context = json.loads(content) if isinstance(content, str) else content
+                        else:
+                            context = context_data
+                    except (json.JSONDecodeError, TypeError):
+                        context = None
+
+                # Parse memory if exists
+                memory = None
+                if record.get("memory"):
+                    try:
+                        memory_data = json.loads(record["memory"])
+                        if "content" in memory_data:
+                            content = memory_data["content"]
+                            memory = json.loads(content) if isinstance(content, str) else content
+                        else:
+                            memory = memory_data
+                    except (json.JSONDecodeError, TypeError):
+                        memory = None
+
+                # Default to empty string if no memory
+                if memory in [None, []]:
+                    memory = ""
+
+                result.append({
+                    "QUESTION": {"question": question, "context": context},
+                    "MEMORIES": memory,
+                })
+
+            return result
 
         except Exception as e:
-            logger.error(f"Error updating user information: {e}")
-            raise
+            logger.error(f"Error getting context and memory: {e}")
+            return []
 
-    # Content File Methods
+    # ==================== CONTENT FILE METHODS ====================
+
     def add_content_file(
         self,
         user_id: str,
@@ -161,6 +255,7 @@ class MongoManager:
         topics: str = None,
         suggested_questions: str = None,
     ):
+        """Add a content file record"""
         try:
             content_file = {
                 "user_id": user_id,
@@ -184,6 +279,7 @@ class MongoManager:
 
             result = self.content_files_collection.insert_one(content_file)
             content_file["_id"] = result.inserted_id
+            logger.info(f"Added content file: {content_id}")
             return content_file
 
         except Exception as e:
@@ -191,12 +287,13 @@ class MongoManager:
             raise
 
     def get_user_content_files(self, user_id: str, content_type: str = None):
+        """Get content files for a user"""
         try:
             query = {"user_id": user_id}
             if content_type:
                 query["content_type"] = content_type
 
-            cursor = self.content_files_collection.find(query).sort("upload_time", 1)
+            cursor = self.content_files_collection.find(query).sort("upload_time", -1)
             return list(cursor)
 
         except Exception as e:
@@ -204,6 +301,7 @@ class MongoManager:
             return []
 
     def get_content_file_by_id(self, user_id: str, content_id: str):
+        """Get a specific content file by ID"""
         try:
             return self.content_files_collection.find_one(
                 {"user_id": user_id, "content_id": content_id}
@@ -213,6 +311,7 @@ class MongoManager:
             return None
 
     def get_content_count(self, user_id: str, content_type: str = None):
+        """Count content files for a user"""
         try:
             query = {"user_id": user_id}
             if content_type:
@@ -233,6 +332,7 @@ class MongoManager:
         topics: str = None,
         suggested_questions: str = None,
     ):
+        """Update a content file record"""
         try:
             update_data = {"updated_at": datetime.utcnow()}
             if summary is not None:
@@ -257,93 +357,20 @@ class MongoManager:
             raise
 
     def delete_content_file(self, user_id: str, content_id: str):
+        """Delete a content file record"""
         try:
             result = self.content_files_collection.delete_one(
                 {"user_id": user_id, "content_id": content_id}
             )
-            return result.deleted_count > 0
+            deleted = result.deleted_count > 0
+            if deleted:
+                logger.info(f"Deleted content file: {content_id}")
+            return deleted
 
         except Exception as e:
             logger.error(f"Error deleting content file: {e}")
             return False
 
-    def get_context_and_memory(self, user_id: str):
-        try:
-            user_information = self.get_user_information(user_id)
-            result = []
 
-            for record in user_information:
-                # Parse question
-                question = record.get("user_question", "")
-
-                # Parse context
-                context = None
-                if record.get("context"):
-                    try:
-                        context_data = json.loads(record["context"])
-                        if "content" in context_data:
-                            content = context_data["content"]
-                            if isinstance(content, str):
-                                context = json.loads(content)
-                            else:
-                                context = content
-                        else:
-                            context = context_data
-                    except json.JSONDecodeError:
-                        context = None
-
-                # Parse memory
-                memory = None
-                if record.get("memory"):
-                    try:
-                        memory_data = json.loads(record["memory"])
-                        if "content" in memory_data:
-                            content = memory_data["content"]
-                            if isinstance(content, str):
-                                memory = json.loads(content)
-                            else:
-                                memory = content
-                        else:
-                            memory = memory_data
-                    except json.JSONDecodeError:
-                        memory = None
-
-                # If memory is empty or None, use empty string
-                if memory in [None, []]:
-                    memory = ""
-
-                # Add to result list
-                result.append(
-                    {
-                        "QUESTION": {"question": question, "context": context},
-                        "MEMORIES": memory,
-                    }
-                )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error getting context and memory: {e}")
-            return []
-
-    async def save_user_information(
-        self, advanced_llm, query, user_id, context=None, graph_id_referenced=None
-    ):
-        try:
-            user_info = self.create_user_information(
-                user_id=user_id,
-                user_question=query,
-                memory="",
-                context=context,
-                graph_id_referenced=graph_id_referenced,
-            )
-            logger.info(
-                f"Saved user information with question_id: {user_info['question_id']}"
-            )
-            return user_info
-        except Exception as e:
-            logger.error(f"Error saving user information: {e}")
-            return None
-
-
+# Global instance
 mongo_db_manager = MongoManager()
