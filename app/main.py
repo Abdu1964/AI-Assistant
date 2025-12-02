@@ -4,41 +4,38 @@ from .llm_handle.llm_models import (
     get_llm_model,
     openai_embedding_model,
 )
-from .annotation_graph.annotated_graph import Graph
-from .annotation_graph.schema_handler import SchemaHandler
-from .rag.rag import RAG
-from .rag.utils.web_search import SimpleWebSearch
-from .prompts.conversation_handler import conversation_prompt
 from .prompts.classifier_prompt import (
     classifier_prompt,
     answer_from_graph,
     main_classifier_prompt
 )
+from .annotation_graph.annotated_graph import Graph
+from .annotation_graph.schema_handler import SchemaHandler
+from .rag.rag import RAG
+from .rag.utils.web_search import SimpleWebSearch
+from .prompts.conversation_handler import conversation_prompt
 from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
-from .storage.history_manager import HistoryManager
-from .storage.mongo_storage import mongo_db_manager
 from .socket_manager import emit_to_user
 from .Galaxy_integration.galaxy import GalaxyHandler
 from .biogpt_agent.biogpt import BioGPTAgent
-import asyncio
-import logging.handlers as loghandlers
-from dotenv import load_dotenv
-import traceback
-import json
-import os
-from flask_socketio import emit
 from typing import TypedDict, List, Annotated, Any, Dict, Optional
+from flask_socketio import emit
+from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_core.tools import tool
+import asyncio
+import traceback
+import json
+import os
 import operator
 import logging
-from app.biogpt_agent.biogpt import BioGPTAgent
+import logging.handlers as loghandlers
 
 
-logger = logging.getLogger("AssistantLogger")
-log_dir = "logfiles"
+logger = logging.getLogger(__name__)
+log_dir = "/AI-Assistant/logfiles"
 
 log_file = os.path.join(log_dir, "Assistant.log")
 logger.setLevel(logging.DEBUG)
@@ -88,13 +85,13 @@ class AiAssistance:
         schema_handler,
         qdrant_client=None,
         embedding_model=None,
+        mongo_db_manager=None,
     ) -> None:
         self.advanced_llm = advanced_llm
         self.basic_llm = basic_llm
         self.annotation_graph = Graph(advanced_llm, schema_handler)
         self.graph_summarizer = Graph_Summarizer(self.advanced_llm)
         self.rag = RAG(llm=advanced_llm, qdrant_client=qdrant_client)
-        self.history = HistoryManager()
         self.store = mongo_db_manager
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
         self.galaxy_handler = GalaxyHandler(advanced_llm, qdrant_client, embedding_model)
@@ -340,7 +337,7 @@ class AiAssistance:
 
                 response_dict = {
                     "text": summary if summary else "",
-                    "json_query": json_format,
+                    "json_query": json_query,
                     "source": "annotation database"
                 }
 
@@ -532,7 +529,7 @@ class AiAssistance:
             if files:
                 logger.info(f"Retrieving Galaxy files for user: {user_id}")
                 files_response = self.galaxy_handler.get_galaxy_info(
-                    query=query, user_id=user_id, token=token
+                    query=query, user_id=user_id, token=token, files=files
                 )
                 if files_response:
                     files_text = files_response.get("text", str(files_response)) if isinstance(files_response, dict) else str(files_response)
@@ -781,15 +778,6 @@ Write a **single, fluent, and conversational summary**:
         response.setdefault("text", "")
         response.setdefault("json_format", None)
 
-        try:
-            self.history.create_history(
-                user_id=user_id,
-                user_message=state.get("user_query", ""),
-                assistant_answer=response.get("text", "")
-            )
-        except Exception as e:
-            logger.error(f"Error saving history: {str(e)}")
-        
         # Emit final response
         emit_to_user(user=user_id, message=response, status="completed")
         
@@ -829,7 +817,7 @@ Write a **single, fluent, and conversational summary**:
                 "annotation_response": None,
                 "rag_response": None,
                 "galaxy_response": None,
-                "biogpt_response":None,
+                "biogpt_response": None,
                 "content_retrieval_response": None,
                 "agents_to_run": [],
                 "agents_completed": [],
@@ -838,8 +826,9 @@ Write a **single, fluent, and conversational summary**:
             # Run the workflow
             result = self.app.invoke(initial_state)
 
-            # Always extract the structured response
+            # Extract the structured response
             response = result.get("response", {"text": "", "json_format": None})
+            
             # Ensure consistent structure
             if not isinstance(response, dict):
                 response = {"text": str(response), "json_query": None}
@@ -847,6 +836,9 @@ Write a **single, fluent, and conversational summary**:
                 response.setdefault("text", "")
                 response.setdefault("json_query", None)
 
+            # ✅ Add agents_completed to the response so assistant_response can save it
+            response["agents_completed"] = result.get("agents_completed", [])
+            
             logger.info(f"Agent completed successfully for user: {user_id}")
             return response
 
@@ -854,12 +846,13 @@ Write a **single, fluent, and conversational summary**:
             logger.error("Error in agent processing", exc_info=True)
             error_response = {
                 "text": f"I apologize, but I encountered an error while processing your request: {str(e)}",
-                "json_query": None
+                "json_query": None,
+                "agents_completed": []
             }
             emit_to_user(user=user_id, message=error_response, status="error")
             return error_response
 
-    
+
     def assistant_response(
         self, 
         query: str, 
@@ -880,6 +873,7 @@ Write a **single, fluent, and conversational summary**:
                 f"graph_id={graph_id}, content_ids={content_ids}, files={files}"
             )
             
+            # Get conversation history and memory
             try:
                 user_information = self.store.get_context_and_memory(user_id)
                 history = []
@@ -891,11 +885,12 @@ Write a **single, fluent, and conversational summary**:
                     history.append({"question": q, "context": c})
                     memory.append(m)
             except Exception as e:
-                history = " "
-                memory = " "
+                history = []
+                memory = []
 
-            logger.info(f"Histories of the user are : {history} and memories are {memory}")
+            logger.info(f"Histories of the user are: {history} and memories are {memory}")
 
+            # Generate LLM response to decide routing
             prompt = conversation_prompt.format(
                 memory=memory,
                 query=query,
@@ -907,21 +902,30 @@ Write a **single, fluent, and conversational summary**:
             emit_to_user(user=user_id, message="Analyzing...")
             
             if response:
+                # Case 1: Direct response (no agent needed)
                 if "response:" in response:
                     result = response.split("response:")[1].strip()
                     final_response = result.strip('"')
-                    self.store.save_user_information(
-                        advanced_llm=self.advanced_llm,
-                        query=query,
+                    
+                    # ✅ Save history with all available info
+                    self.store.create_history(
                         user_id=user_id,
-                        context=None,
+                        user_message=query,
+                        assistant_answer=final_response,
                         graph_id_referenced=graph_id,
+                        content_ids=content_ids,
+                        files=files,
+                        agents_used=[],  # No agents used for direct response
                     )
+                    
                     emit_to_user(user=user_id, message=final_response, status="completed")
                     return {"text": final_response}
 
+                # Case 2: Agent response (needs processing)
                 elif "question:" in response:
                     refactored_question = response.split("question:")[1].strip()
+                    
+                    # Call agent with all parameters
                     agent_response = self.agent(
                         refactored_question,
                         user_id,
@@ -931,48 +935,77 @@ Write a **single, fluent, and conversational summary**:
                         files=files,
                         resource=resource,
                     )
+                    
+                    # Normalize response to dict
                     if isinstance(agent_response, str):
-                        agent_response = {"text": agent_response}
-                    elif isinstance(agent_response, dict):
-                        pass
-                    else:
-                        agent_response = {"text": str(agent_response)}
+                        agent_response = {"text": agent_response, "agents_completed": []}
+                    elif not isinstance(agent_response, dict):
+                        agent_response = {"text": str(agent_response), "agents_completed": []}
 
-                    resource_type = (
-                        agent_response.get("resource", {}).get("type")
-                        if agent_response
-                        else None
-                    )
-
+                    # Log resource type if available
+                    resource_type = agent_response.get("resource", {}).get("type")
                     if resource_type:
-                        logger.info(f"Here is the resource successfully made {resource_type}")
+                        logger.info(f"Resource successfully created: {resource_type}")
 
+                    # Extract answer
+                    assistant_answer = agent_response.get("text", str(agent_response))
+                    
+                    # Extract agents that were used
+                    agents_used = agent_response.get("agents_completed", [])
+                    
+                    # ✅ Save complete history with ALL information
+                    self.store.create_history(
+                        user_id=user_id,
+                        user_message=query,  # Original query, not refactored
+                        assistant_answer=assistant_answer,
+                        graph_id_referenced=graph_id,
+                        content_ids=content_ids,
+                        files=files,
+                        agents_used=agents_used,
+                    )
+                    
                     emit_to_user(user=user_id, message=agent_response, status="completed")
-                    assistant_answer = (
-                        agent_response.get("text", str(agent_response))
-                        if isinstance(agent_response, dict)
-                        else str(agent_response)
-                    )
-                    self.history.create_history(
-                        user_id, query, assistant_answer, graph_id
-                    )
                     return agent_response
+                    
             else:
+                # No response generated
                 logger.error("No response generated from LLM")
-                self.store.save_user_information(
-                    self.advanced_llm, query, user_id, resource
+                error_msg = "I apologize, but I encountered an error while processing your request."
+                
+                # ✅ Save the error attempt
+                self.store.create_history(
+                    user_id=user_id,
+                    user_message=query,
+                    assistant_answer=error_msg,
+                    graph_id_referenced=graph_id,
+                    content_ids=content_ids,
+                    files=files,
+                    agents_used=[],
                 )
-            
-                error_msg = (
-                    "I apologize, but I encountered an error while processing your request."
-                )
+                
                 emit_to_user(user=user_id, message={"text": error_msg}, status="completed")
                 return {"text": error_msg}
-          
+        
         except Exception as e:
             logger.error(f"Error in assistant_response: {e}", exc_info=True)
+            error_msg = "I apologize, but I encountered an error while processing your request."
+            
+            # ✅ Try to save error history
+            try:
+                self.store.create_history(
+                    user_id=user_id,
+                    user_message=query,
+                    assistant_answer=error_msg,
+                    graph_id_referenced=graph_id,
+                    content_ids=content_ids,
+                    files=files,
+                    agents_used=[],
+                )
+            except Exception as save_error:
+                logger.error(f"Failed to save error history: {save_error}")
+            
             return {
-                "text": "I apologize, but I encountered an error while processing your request.",
+                "text": error_msg,
                 "json_query": None
             }
 

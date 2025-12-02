@@ -1,6 +1,5 @@
 from app.prompts.rag_prompts import RETRIEVE_PROMPT
 from app.storage.memory_layer import MemoryManager
-from app.storage.history_manager import HistoryManager
 import traceback
 import os
 import logging
@@ -217,7 +216,7 @@ class RAG:
             MemoryManager(self.llm).add_memory(f"pdf file : {file.filename}", user_id)
 
             # Add a history entry for the PDF upload
-            HistoryManager().create_history(
+            mongo_db_manager.create_history(
                 user_id=user_id,
                 user_message=f"Uploaded PDF: {file.filename}",
                 assistant_answer=f"PDF '{file.filename}' uploaded successfully.",
@@ -318,7 +317,7 @@ class RAG:
             MemoryManager(self.llm).add_memory(f"web content : {url}", user_id)
 
             # Add a history entry for the web content upload
-            HistoryManager().create_history(
+            mongo_db_manager.create_history(
                 user_id=user_id,
                 user_message=f"Added web content: {url}",
                 assistant_answer=f"Web content from '{url}' added successfully.",
