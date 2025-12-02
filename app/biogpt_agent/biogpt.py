@@ -9,7 +9,7 @@ class BioGPTAgent:
     Agent that uses BioGPT to answer common biological questions.
     """
 
-    def __init__(self, model_name="microsoft/biogpt", device=None):
+    def __init__(self, llm, model_name="microsoft/biogpt", device=None):
         self.tokenizer = BioGptTokenizer.from_pretrained(model_name)
         self.model = BioGptForCausalLM.from_pretrained(model_name)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")

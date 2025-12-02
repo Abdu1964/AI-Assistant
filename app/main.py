@@ -37,6 +37,9 @@ import logging
 from app.biogpt_agent.biogpt import BioGPTAgent
 
 
+logger = logging.getLogger("AssistantLogger")
+log_dir = "logfiles"
+
 log_file = os.path.join(log_dir, "Assistant.log")
 logger.setLevel(logging.DEBUG)
 loghandle = loghandlers.TimedRotatingFileHandler(
