@@ -15,7 +15,7 @@ class BioGPTAgent:
     _device = None
     _lock = Lock()
 
-    def __init__(self, llm=None, model_name="kirubel1738/biogpt-bioqa-lora-merged"):
+    def __init__(self, llm=None, model_name="microsoft/biogpt"):
         self.model_name = model_name
         self.llm = llm  
 
