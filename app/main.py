@@ -145,16 +145,15 @@ class AiAssistance:
             },
         )
 
-        # All agents converge to aggregator
-        workflow.add_edge("annotation_agent", "aggregator")
-        workflow.add_edge("rag_agent", "aggregator")
-        workflow.add_edge("galaxy_agent", "aggregator")
-        workflow.add_edge("content_retrieval_agent", "aggregator")
-        workflow.add_edge("biogpt_agent", "aggregator")
+        # All agents go back to router to check for next agent
+        workflow.add_edge("annotation_agent", "router")
+        workflow.add_edge("rag_agent", "router")
+        workflow.add_edge("galaxy_agent", "router")
+        workflow.add_edge("content_retrieval_agent", "router")
+        workflow.add_edge("biogpt_agent", "router")
         # Aggregator flows to finalizer
         workflow.add_edge("aggregator", "finalizer")
         workflow.add_edge("finalizer", END)
-
         return workflow
 
     def get_content_summaries(self, user_id, content_ids=None):
@@ -216,8 +215,8 @@ class AiAssistance:
             content_summaries=content_summaries, 
             web_context=web_context
         )
-
         response = self.advanced_llm.generate(classifier_prompt_text).lower()
+        logger.info(f"question classified as {response}")
         
         # Parse response to get multiple query types
         query_types = []
@@ -226,18 +225,23 @@ class AiAssistance:
         
         for qtype in potential_types:
             if "annotation_biological" in qtype or "annotation biological" in qtype:
-                query_types.append("annotation_biological")
-            elif "annotation_general" in qtype or "annotation general" in qtype:
-                query_types.append("annotation_general")
-            elif "galaxy" in qtype:
-                query_types.append("galaxy")
-            elif "rag" in qtype:
-                query_types.append("rag")
-            elif "hypothesis_generation":
-                query_types.append("_hypothesis_agent")
-        
-        # Remove duplicates
-        query_types = list(set(query_types))
+                if "annotation_biological" not in query_types:
+                    query_types.append("annotation_biological")
+            if "annotation_general" in qtype or "annotation general" in qtype:
+                if "annotation_general" not in query_types:
+                    query_types.append("annotation_general")
+            if "galaxy" in qtype:
+                if "galaxy" not in query_types:
+                    query_types.append("galaxy")
+            if "rag" in qtype:
+                if "rag" not in query_types:
+                    query_types.append("rag")
+            if "hypothesis" in qtype:
+                if "hypothesis_generation" not in query_types:
+                    query_types.append("hypothesis_generation")
+            if "biogpt" in qtype:
+                if "biogpt" not in query_types:
+                    query_types.append("biogpt")
         
         # If no types detected, default to rag
         if not query_types:
@@ -419,7 +423,7 @@ class AiAssistance:
                 response_text = response["text"]
             else:
                 response_text = str(response) if response else "No response generated"
-
+            logger.info(f"RAG response: {response_text}")
             return {
                 "rag_response": {
                     "text": response_text, 
@@ -465,7 +469,7 @@ class AiAssistance:
                 response_text = response["text"]
             else:
                 response_text = str(response) if response else "No Galaxy information found"
-
+            logger.info(f"Galaxy response: {response_text}")
             return {
                 "galaxy_response": {
                     "text": response_text, 
@@ -529,7 +533,7 @@ class AiAssistance:
             if files:
                 logger.info(f"Retrieving Galaxy files for user: {user_id}")
                 files_response = self.galaxy_handler.get_galaxy_info(
-                    query=query, user_id=user_id, token=token, files=files
+                    query=query, user_id=user_id, token=token,files=files
                 )
                 if files_response:
                     files_text = files_response.get("text", str(files_response)) if isinstance(files_response, dict) else str(files_response)
@@ -565,7 +569,7 @@ class AiAssistance:
                     "json_query": None,
                     "sources": []
                 }
-
+            logger.info(f"Content retrieval response prepared with {len(content_parts)} parts. response is {response_dict}" )
             return {
                 "content_retrieval_response": response_dict,
                 "agents_completed": ["content_retrieval_agent"],
@@ -586,21 +590,26 @@ class AiAssistance:
 
     def _biogpt_agent(self, state: AgentState) -> dict:
         try:
-            response = self.biogpt.biogpt_agent_function(state["user_query"], state["user_id"], state["token"])
+            emit_to_user(user=state["user_id"], message="Analyzing biomedical information...")
+            response = self.biogpt.generate_answer(state["user_query"])
+            logger.info(f"BioGPT response: {response}")
             return {
-                "biogpt_response" : {
-                    "text":response,
-                    "source" :"Biogpt"
-                    }
-                }
+                "biogpt_response": {
+                    "text": response,
+                    "source": "BioGPT"
+                },
+                "agents_completed": ["biogpt_agent"],
+                "messages": [AIMessage(content="BioGPT query processed")]
+            }
         except Exception as e:
             logger.error(f"Error in biogpt agent: {str(e)}", exc_info=True)
             return {
                 "biogpt_response": {
-                    "text":None,
+                    "text": None,
                     "json_query": None,
                     "source": "BioGPT"
                 },
+                "agents_completed": ["biogpt_agent"],
                 "error": str(e)
             }
 
@@ -711,10 +720,14 @@ class AiAssistance:
         try:
             sources_info = []
             for output in agent_outputs:
-                content = output.get("content", "").strip()
+                content = output.get("content", "")
+                # Handle if content is a dict (convert to string)
+                if isinstance(content, dict):
+                    content = str(content)
+                content = content.strip() if isinstance(content, str) else ""
                 if content:
                     sources_info.append(f"From {output.get('source', 'unknown')}: {content}")
-
+           
             combined_text = "\n\n".join(sources_info)
 
             # Include json_query note if present
@@ -752,10 +765,15 @@ Write a **single, fluent, and conversational summary**:
         except Exception as e:
             logger.error(f"Error in aggregation: {str(e)}", exc_info=True)
             # Fallback: simple concatenation with sources
-            fallback_parts = [
-                f"**From {output.get('source', 'unknown')}:**\n{output.get('content', '').strip()}"
-                for output in agent_outputs if output.get('content')
-            ]
+            fallback_parts = []
+            for output in agent_outputs:
+                content = output.get('content', '')
+                if isinstance(content, dict):
+                    content = str(content)
+                if content:
+                    content_str = content.strip() if isinstance(content, str) else str(content)
+                    fallback_parts.append(f"**From {output.get('source', 'unknown')}:**\n{content_str}")
+           
             fallback_text = "\n\n".join(fallback_parts) if fallback_parts else "Annotation data retrieved."
 
             return {
@@ -798,7 +816,8 @@ Write a **single, fluent, and conversational summary**:
             f"Agent called with message: {message}, user_id: {user_id}, "
             f"content_ids: {content_ids}, graph_id: {graph_id}, files: {files}"
         )
-        
+        # return  {"text" :self.biogpt.generate_answer(message)}
+           
         try:
             # Create initial state
             initial_state = {
