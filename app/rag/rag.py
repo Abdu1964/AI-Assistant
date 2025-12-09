@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-VECTOR_COLLECTION = os.getenv("VECTOR_COLLECTION", "SITE_INFORMATION")
+VECTOR_COLLECTION = os.getenv("VECTOR_COLLECTION")
 USER_COLLECTION = os.getenv("USER_COLLECTION", "CHAT_MEMORY")
 CONTENT_LIMIT = 10  # Total content limit (PDFs + web content)
 
@@ -337,7 +337,7 @@ class RAG:
         self,
         query_str: str,
         user_id=None,
-        filter=None,
+        filter=False,
         content_ids=None,
     ):
         """
@@ -389,6 +389,7 @@ class RAG:
                 filter=True,
                 content_ids=content_ids,
             )
+            logger.info(f"Query executed successfully. result1 and result2 obtained. {result1} {result2}")
             # Combine both results (general + user content)
             combined_results = []
             if isinstance(result1, list):
@@ -399,17 +400,18 @@ class RAG:
                 logger.error("No query result to process.")
                 return None
 
-            urls = SimpleWebSearch().get_context_urls(query_str, num_results=3)
-            urls_line = ", ".join(urls) if urls else "None"
-            retrieved_blob = (
-                f"{combined_results}\n\nWeb context URLs (not scraped): {urls_line}"
-            )
+            # urls = SimpleWebSearch().get_context_urls(query_str, num_results=3)
+            # urls_line = ", ".join(urls) if urls else "None"
+            # retrieved_blob = (
+            #     f"{combined_results}\n\nWeb context URLs (not scraped): {urls_line}"
+            # )
+            
 
             prompt = RETRIEVE_PROMPT.format(
-                query=query_str, retrieved_content=retrieved_blob
+                query=query_str, retrieved_content=combined_results
             )
             result = self.llm.generate(prompt)
-            logger.info("Result generated successfully.")
+            logger.info(f"Result generated successfully.{result}")
             response = {"text": result, "resource": {"type": "RAG", "id": None}}
             return response
         except Exception as e:
