@@ -63,7 +63,7 @@ class MongoManager:
         assistant_answer: str, 
         graph_id_referenced: str = None,
         content_ids: list = None,
-        files: list = None,
+        urls: list = None,
         agents_used: list = None,
 
     ):
@@ -82,7 +82,7 @@ class MongoManager:
                 "assistant_answer": assistant_answer,
                 "graph_id_referenced": graph_id_referenced,
                 "content_ids":content_ids,
-                "files":files,
+                "urls":urls,
                 "agents_used": agents_used,
                 "memory": None,
                 "context": None,

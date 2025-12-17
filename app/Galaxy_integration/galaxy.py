@@ -24,30 +24,30 @@ class GalaxyHandler:
         self.collection_name = "1_AI_ASSISTANT_GALAXY_DATASETS"
         logger.info("GalaxyHandler initialized")
 
-    def get_galaxy_info(self, query, user_id, token, files=None):
+    def get_galaxy_info(self, query, user_id, token, urls=None):
         """Main entry point: returns text only for Flask"""
-        logger.info(f"get_galaxy_info called with query='{query}', user_id='{user_id}', files={files}")
+        logger.info(f"get_galaxy_info called with query='{query}', user_id='{user_id}', urls={urls}")
         try:
-            if files and query:
-                return self._handle_files(query=query, user_id=user_id, files=files)
+            if urls and query:
+                return self._handle_files(query=query, user_id=user_id, urls=urls)
             else:
-                logger.info("No files provided, routing to MCP handler")
+                logger.info("No urls provided, routing to MCP handler")
                 return self._handle_mcp_sync(query, token)
         except Exception as e:
             logger.error(f"Galaxy handler failed: {e}")
             traceback.print_exc()
             return {"text": f"Error processing Galaxy request: {e}"}
 
-    def _handle_files(self, query, user_id, files):
+    def _handle_files(self, query, user_id, urls):
         """Handle file-based queries using RAG - supports multiple URLs"""
-        logger.info(f"_handle_files called with files={files}")
+        logger.info(f"_handle_files called with urls={urls}")
         
         # Normalize to list
-        if isinstance(files, str):
-            files = [files]
+        if isinstance(urls, str):
+            urls = [urls]
         
-        if not files:
-            return {"text": "No files provided for analysis."}
+        if not urls:
+            return {"text": "No urls provided for analysis."}
 
         try:
             processor = HTMLProcessor(self.qdrant_client, self.llm)
@@ -68,7 +68,7 @@ class GalaxyHandler:
             
             if collection_exists:
                 # Collection exists, check each URL
-                for url in files:
+                for url in urls:
                     logger.info(f"Checking if URL exists: {url}")
                     try:
                         stored = self.qdrant_client.retrieve_similar_content(
@@ -90,7 +90,7 @@ class GalaxyHandler:
             else:
                 # Collection doesn't exist, process all URLs
                 logger.info("Collection doesn't exist, will process all URLs")
-                urls_to_process = files.copy()
+                urls_to_process = urls.copy()
             
             # Process all new URLs in batch
             if urls_to_process:
@@ -115,13 +115,13 @@ class GalaxyHandler:
             else:
                 logger.info("All URLs already exist in collection")
 
-            logger.info(f"Retrieving similar content for query: '{query}' from {len(files)} URLs")
+            logger.info(f"Retrieving similar content for query: '{query}' from {len(urls)} URLs")
             
             try:
                 similar_results = self.qdrant_client.retrieve_similar_content(
                     collection_name=self.collection_name,
                     query=query,
-                    content_ids=files,  
+                    content_ids=urls,  
                     top_k=10  
                 )
             except Exception as e:
@@ -151,7 +151,7 @@ class GalaxyHandler:
                 context_text = "\n\n".join(context_parts)
                 
                 llm_prompt = f"""
-                            You are an expert AI assistant. You are given the following context extracted from {len(files)} document(s):
+                            You are an expert AI assistant. You are given the following context extracted from {len(urls)} document(s):
 
                             {context_text}
 
@@ -167,7 +167,7 @@ class GalaxyHandler:
                 response_text = self.llm.generate(llm_prompt)
             else:
                 logger.warning("No relevant chunks found in collection")
-                response_text = f"I could not find any relevant information in the provided {len(files)} document(s) to answer your query."
+                response_text = f"I could not find any relevant information in the provided {len(urls)} document(s) to answer your query."
 
             return {"text": response_text}
 
@@ -175,7 +175,7 @@ class GalaxyHandler:
             logger.error(f"Galaxy file analyzer failed: {e}")
             import traceback
             traceback.print_exc()
-            return {"text": f"Error analyzing files: {e}"}
+            return {"text": f"Error analyzing urls: {e}"}
             
     def _handle_mcp_sync(self, query, token):
         """Sync wrapper - runs MCP in subprocess to avoid eventlet conflicts"""
@@ -231,9 +231,9 @@ if __name__ == "__main__":
                     text=True,
                     timeout=120
                 )
-
                 if result.returncode == 0:
                     output = json.loads(result.stdout.strip())
+                    logger.info(f"Subprocess completed with response {output}")
                     resonse = self.llm.generate(f"clean it and Summarize the following response concisely:\n\n{output} for the user query {query}")
                     return resonse
                 else:
