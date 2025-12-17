@@ -146,7 +146,7 @@ class RAG:
                 return return_response
 
             content_id = str(uuid.uuid4())
-            upload_folder = "storage/pdfs"
+            upload_folder = "pdfs_uploaded/pdfs"
             os.makedirs(upload_folder, exist_ok=True)
             pdf_path = os.path.join(upload_folder, f"{content_id}.pdf")
             file.save(pdf_path)
@@ -382,13 +382,45 @@ class RAG:
         """
         try:
             logger.info("Generating result for the query.")
-            result1 = self.query(query_str=query_str, user_id=user_id)
-            result2 = self.query(
-                query_str=query_str,
-                user_id=user_id,
-                filter=True,
-                content_ids=content_ids,
-            )
+                
+            result1 = []  # Initialize as empty
+            result2 = []
+            content_sources = []
+            
+            if content_ids:
+                # Only query user collection with content_ids
+                logger.info(f"Generating result for the query from the specified content {content_ids}.")
+                result2 = self.query(
+                    query_str=query_str,
+                    user_id=user_id,
+                    filter=True,
+                    content_ids=content_ids,
+                )
+                
+                if not isinstance(content_ids, list):
+                    content_ids = [content_ids]
+
+                for content_id in content_ids:
+                    doc = mongo_db_manager.get_content_file_by_id(
+                        user_id=user_id,
+                        content_id=content_id
+                    )
+
+                    if not doc:
+                        continue
+
+                    content_sources.append({
+                        "content_id": content_id,
+                        "filename": doc.get("filename"),
+                        "summary": doc.get("summary"),
+                        "topics": doc.get("topics", ""),
+                        "suggested_questions": doc.get("suggested_questions", "")
+                    })
+            else:
+                # No content_ids - query general
+                result1 = self.query(query_str=query_str, user_id=user_id)
+
+                  
             logger.info(f"Query executed successfully. result1 and result2 obtained. {result1} {result2}")
             # Combine both results (general + user content)
             combined_results = []
@@ -398,21 +430,21 @@ class RAG:
                 combined_results.extend(result2)
             if not combined_results:
                 logger.error("No query result to process.")
-                return None
-
-            # urls = SimpleWebSearch().get_context_urls(query_str, num_results=3)
-            # urls_line = ", ".join(urls) if urls else "None"
-            # retrieved_blob = (
-            #     f"{combined_results}\n\nWeb context URLs (not scraped): {urls_line}"
-            # )
-            
+                return None          
 
             prompt = RETRIEVE_PROMPT.format(
                 query=query_str, retrieved_content=combined_results
             )
             result = self.llm.generate(prompt)
+            
             logger.info(f"Result generated successfully.{result}")
-            response = {"text": result, "resource": {"type": "RAG", "id": None}}
+            response = {
+                        "text": result,
+                        "resource": {
+                            "type": "RAG",
+                            "content_sources": content_sources
+                        }
+                    }            
             return response
         except Exception as e:
             logger.error(f"An error occurred while generating the result: {e}")
