@@ -7,7 +7,8 @@ from .llm_handle.llm_models import (
 from .prompts.classifier_prompt import (
     classifier_prompt,
     answer_from_graph,
-    main_classifier_prompt
+    main_classifier_prompt,
+    aggeregator_prompt
 )
 from .annotation_graph.annotated_graph import Graph
 from .annotation_graph.schema_handler import SchemaHandler
@@ -62,7 +63,7 @@ class AgentState(TypedDict):
     error: str
     content_ids: Optional[List[str]]
     graph_id: Optional[str]
-    files: Optional[List[str]]
+    urls: Optional[List[str]]
     resource: Optional[str]
     pipeline_details: Dict[str, Any]
     # Agent-specific responses with source attribution
@@ -199,21 +200,15 @@ class AiAssistance:
         user_id = state["user_id"]
         content_ids = state.get("content_ids")
         graph_id = state.get("graph_id")
-        files = state.get("files")
+        urls = state.get("urls")
 
         # Fetch content summaries
         content_summaries = self.get_content_summaries(user_id, content_ids)
-        
-        # Get web context
-        web_urls = SimpleWebSearch().get_context_urls(query, num_results=2)
-        web_context = f"Web context: {', '.join(web_urls)}" if web_urls else ""
-
         logger.info(f"Classifying query: {query}")
         
         classifier_prompt_text = main_classifier_prompt.format(
             query=query, 
             content_summaries=content_summaries, 
-            web_context=web_context
         )
         response = self.advanced_llm.generate(classifier_prompt_text).lower()
         logger.info(f"question classified as {response}")
@@ -253,7 +248,7 @@ class AiAssistance:
         agents_to_run = []
         
         # Add content retrieval agent if any content references exist
-        if content_ids or files or graph_id:
+        if content_ids or urls or graph_id:
             agents_to_run.append("content_retrieval_agent")
 
         # Map query types to agent routes
@@ -337,11 +332,11 @@ class AiAssistance:
             
             if pipeline_response.get("success", False):
                 summary = pipeline_response.get("summary", "")
-                json_query = pipeline_response.get("json_format", None)
+                json_format = pipeline_response.get("json_format", None)
 
                 response_dict = {
                     "text": summary if summary else "",
-                    "json_query": json_query,
+                    "json_format": json_format,
                     "source": "annotation database"
                 }
 
@@ -356,7 +351,7 @@ class AiAssistance:
                 return {
                     "annotation_response": {
                         "text": f"Error: {error_msg}", 
-                        "json_query": None,
+                        "json_format": None,
                         "source": "annotation database"
                     },
                     "agents_completed": ["annotation_agent"],
@@ -368,7 +363,7 @@ class AiAssistance:
             return {
                 "annotation_response": {
                     "text": f"Error: {str(e)}", 
-                    "json_query": None,
+                    "json_format": None,
                     "source": "annotation database"
                 },
                 "agents_completed": ["annotation_agent"],
@@ -408,7 +403,7 @@ class AiAssistance:
         logger.info(
             f"RAG agent processing query: {state['user_query']} for user: {state['user_id']}"
         )
-        
+
         try:
             emit_to_user(user=state["user_id"], message="Retrieving information...")
             
@@ -427,7 +422,7 @@ class AiAssistance:
             return {
                 "rag_response": {
                     "text": response_text, 
-                    "json_query": None,
+                    "json_format": None,
                     "source": "knowledge base"
                 },
                 "agents_completed": ["rag_agent"],
@@ -439,7 +434,7 @@ class AiAssistance:
             return {
                 "rag_response": {
                     "text": f"Error: {str(e)}", 
-                    "json_query": None,
+                    "json_format": None,
                     "source": "knowledge base"
                 },
                 "agents_completed": ["rag_agent"],
@@ -473,7 +468,7 @@ class AiAssistance:
             return {
                 "galaxy_response": {
                     "text": response_text, 
-                    "json_query": None,
+                    "json_format": None,
                     "source": "Galaxy platform"
                 },
                 "agents_completed": ["galaxy_agent"],
@@ -485,7 +480,7 @@ class AiAssistance:
             return {
                 "galaxy_response": {
                     "text": f"Error: {str(e)}", 
-                    "json_query": None,
+                    "json_format": None,
                     "source": "Galaxy platform"
                 },
                 "agents_completed": ["galaxy_agent"],
@@ -500,7 +495,7 @@ class AiAssistance:
         user_id = state.get("user_id")
         token = state.get("token")
         graph_id = state.get("graph_id")
-        files = state.get("files")
+        urls = state.get("urls")
         content_ids = state.get("content_ids")
         resource = state.get("resource")
 
@@ -529,18 +524,18 @@ class AiAssistance:
                     })
                     sources.append(f"graph:{graph_id}")
 
-            # Galaxy files
-            if files:
-                logger.info(f"Retrieving Galaxy files for user: {user_id}")
-                files_response = self.galaxy_handler.get_galaxy_info(
-                    query=query, user_id=user_id, token=token,files=files
+            # Galaxy urls
+            if urls:
+                logger.info(f"Retrieving Galaxy urls for user: {user_id}")
+                urls_response = self.galaxy_handler.get_galaxy_info(
+                    query=query, user_id=user_id, token=token,urls=urls
                 )
-                if files_response:
-                    files_text = files_response.get("text", str(files_response)) if isinstance(files_response, dict) else str(files_response)
-                    for file in (files if isinstance(files, list) else [files]):
+                if urls_response:
+                    urls_text = urls_response.get("text", str(urls_response)) if isinstance(urls_response, dict) else str(urls_response)
+                    for file in (urls if isinstance(urls, list) else [urls]):
                         content_parts.append({
                             "source": f"file:{file}",
-                            "content": files_text
+                            "content": urls_text
                         })
                         sources.append(f"file:{file}")
 
@@ -550,9 +545,11 @@ class AiAssistance:
                 rag_content = self.rag.get_result_from_rag(query, user_id, content_ids)
                 if rag_content:
                     rag_text = rag_content.get("text", str(rag_content)) if isinstance(rag_content, dict) else str(rag_content)
+                    resources = rag_content.get("resource",{})
                     content_parts.append({
                         "source": f"content IDs: {', '.join(content_ids)}",
-                        "content": rag_text
+                        "content": rag_text,
+                        "resource": resources
                     })
                     sources.append(f"content IDs: {', '.join(content_ids)}")
 
@@ -560,13 +557,13 @@ class AiAssistance:
             if content_parts:
                 response_dict = {
                     "text": content_parts,
-                    "json_query": None,
+                    "json_format": None,
                     "sources": sources
                 }
             else:
                 response_dict = {
                     "text": [],
-                    "json_query": None,
+                    "json_format": None,
                     "sources": []
                 }
             logger.info(f"Content retrieval response prepared with {len(content_parts)} parts. response is {response_dict}" )
@@ -581,7 +578,7 @@ class AiAssistance:
             return {
                 "content_retrieval_response": {
                     "text": [], 
-                    "json_query": None,
+                    "json_format": None,
                     "sources": []
                 },
                 "agents_completed": ["content_retrieval_agent"],
@@ -606,7 +603,7 @@ class AiAssistance:
             return {
                 "biogpt_response": {
                     "text": None,
-                    "json_query": None,
+                    "json_format": None,
                     "source": "BioGPT"
                 },
                 "agents_completed": ["biogpt_agent"],
@@ -616,14 +613,14 @@ class AiAssistance:
     def _aggregate_responses(self, state: AgentState) -> Dict[str, Any]:
         """
         Aggregate responses from all agents with source attribution.
-        Ensures that text content is combined coherently and structured JSON data (json_query)
+        Ensures that text content is combined coherently and structured JSON data (json_format)
         is always included when available.
         """
         user_query = state.get("user_query", "")
         logger.info("Aggregating responses from multiple agents with source attribution")
 
         agent_outputs = []
-        json_query = None
+        json_format = None
 
         # ---------------- Annotation Agent ----------------
         annotation_resp = state.get("annotation_response")
@@ -637,14 +634,14 @@ class AiAssistance:
                 })
 
             # Capture JSON structured data
-            json_query = annotation_resp.get("json_query")
+            json_format = annotation_resp.get("json_format")
 
             # Add placeholder if only JSON exists
-            if json_query and not text_content:
+            if json_format and not text_content:
                 agent_outputs.append({
                     "agent": "annotation_agent",
                     "source": annotation_resp.get("source", "annotation database"),
-                    "content": "Annotation data retrieved successfully (see structured data)."
+                    "content": "Annotation visualization structure format is created successfully (see structured data)."
                 })
 
         # ---------------- RAG Agent ----------------
@@ -700,11 +697,11 @@ class AiAssistance:
                 })
 
         # ---------------- Handle Empty Outputs ----------------
-        if not agent_outputs and json_query:
+        if not agent_outputs and json_format:
             return {
                 "response": {
                     "text": "I found the requested annotation data in the database.",
-                    "json_query": json_query
+                    "json_format": json_format
                 }
             }
 
@@ -712,7 +709,7 @@ class AiAssistance:
             return {
                 "response": {
                     "text": "I couldn't find any relevant information to answer your query.",
-                    "json_query": None
+                    "json_format": None
                 }
             }
 
@@ -730,27 +727,12 @@ class AiAssistance:
            
             combined_text = "\n\n".join(sources_info)
 
-            # Include json_query note if present
+            # Include json_format note if present
             json_note = ""
-            if json_query:
+            if json_format:
                 json_note = "\n\nNote: Structured annotation data is also available for this query."
 
-            prompt = f"""You are an AI assistant acting as a **final aggregator**. 
-Your task is to respond to the user's query: "{user_query}".
-
-You have outputs from multiple agents, which may provide overlapping, complementary, or missing information.
-
-Information from agents:
-{combined_text}{json_note}
-
-Write a **single, fluent, and conversational summary**:
-- Integrate all findings naturally into one flowing explanation.
-- Reference sources naturally (e.g., "Based on the annotation database..." or "From the knowledge base...").
-- Highlight conflicts if any.
-- Keep it helpful, informative, and readable.
-- Acknowledge structured annotation data if available.
-- if nothing is provide Do not make up information always respond with the responses from the.
-"""
+            prompt = aggeregator_prompt.format(user_query=user_query, combined_responses=combined_text, json_note=json_note)
 
             aggregated_text = self.advanced_llm.generate(prompt)
             logger.info(f"Successfully aggregated response: {aggregated_text[:100]}...")
@@ -758,7 +740,7 @@ Write a **single, fluent, and conversational summary**:
             return {
                 "response": {
                     "text": aggregated_text,
-                    "json_query": json_query
+                    "json_format": json_format
                 }
             }
 
@@ -779,7 +761,7 @@ Write a **single, fluent, and conversational summary**:
             return {
                 "response": {
                     "text": fallback_text,
-                    "json_query": json_query
+                    "json_format": json_format
                 }
             }
 
@@ -792,9 +774,8 @@ Write a **single, fluent, and conversational summary**:
         
         # Ensure response has correct structure
         if not isinstance(response, dict):
-            response = {"text": str(response), "json_query": None}
+            response = {"text": str(response), "json_format": None}
         response.setdefault("text", "")
-        response.setdefault("json_format", None)
 
         # Emit final response
         emit_to_user(user=user_id, message=response, status="completed")
@@ -808,13 +789,13 @@ Write a **single, fluent, and conversational summary**:
         token: str,
         content_ids: Optional[List[str]] = None,
         graph_id: Optional[str] = None,
-        files: Optional[List[str]] = None,
+        urls: Optional[List[str]] = None,
         resource: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Main entry point for processing queries with parallel agent execution"""
         logger.info(
             f"Agent called with message: {message}, user_id: {user_id}, "
-            f"content_ids: {content_ids}, graph_id: {graph_id}, files: {files}"
+            f"content_ids: {content_ids}, graph_id: {graph_id}, urls: {urls}"
         )
         # return  {"text" :self.biogpt.generate_answer(message)}
            
@@ -826,11 +807,11 @@ Write a **single, fluent, and conversational summary**:
                 "user_id": user_id,
                 "token": token,
                 "query_types": [],
-                "response": {"text": "", "json_query": None},
+                "response": {"text": "", "json_format": None},
                 "error": "",
                 "content_ids": content_ids,
                 "graph_id": graph_id,
-                "files": files,
+                "urls": urls,
                 "resource": resource,
                 "pipeline_details": {},
                 "annotation_response": None,
@@ -846,14 +827,14 @@ Write a **single, fluent, and conversational summary**:
             result = self.app.invoke(initial_state)
 
             # Extract the structured response
-            response = result.get("response", {"text": "", "json_format": None})
+            response = result.get("response", {"text": ""})
             
             # Ensure consistent structure
             if not isinstance(response, dict):
-                response = {"text": str(response), "json_query": None}
+                response = {"text": str(response), "json_format": None}
             else:
                 response.setdefault("text", "")
-                response.setdefault("json_query", None)
+                response.setdefault("json_format", None)
 
             # ✅ Add agents_completed to the response so assistant_response can save it
             response["agents_completed"] = result.get("agents_completed", [])
@@ -865,7 +846,7 @@ Write a **single, fluent, and conversational summary**:
             logger.error("Error in agent processing", exc_info=True)
             error_response = {
                 "text": f"I apologize, but I encountered an error while processing your request: {str(e)}",
-                "json_query": None,
+                "json_format": None,
                 "agents_completed": []
             }
             emit_to_user(user=user_id, message=error_response, status="error")
@@ -878,7 +859,7 @@ Write a **single, fluent, and conversational summary**:
         user_id: str, 
         token: str, 
         graph_id: Optional[str] = None,
-        files: Optional[List[str]] = None,
+        urls: Optional[List[str]] = None,
         content_ids: Optional[List[str]] = None,
         resource: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -889,7 +870,7 @@ Write a **single, fluent, and conversational summary**:
         try:
             logger.info(
                 f"Assistant response called with query={query}, user_id={user_id}, "
-                f"graph_id={graph_id}, content_ids={content_ids}, files={files}"
+                f"graph_id={graph_id}, content_ids={content_ids}, urls={urls}"
             )
             
             # Get conversation history and memory
@@ -933,7 +914,7 @@ Write a **single, fluent, and conversational summary**:
                         assistant_answer=final_response,
                         graph_id_referenced=graph_id,
                         content_ids=content_ids,
-                        files=files,
+                        urls=urls,
                         agents_used=[],  # No agents used for direct response
                     )
                     
@@ -951,7 +932,7 @@ Write a **single, fluent, and conversational summary**:
                         token,
                         content_ids=content_ids,
                         graph_id=graph_id,
-                        files=files,
+                        urls=urls,
                         resource=resource,
                     )
                     
@@ -979,7 +960,7 @@ Write a **single, fluent, and conversational summary**:
                         assistant_answer=assistant_answer,
                         graph_id_referenced=graph_id,
                         content_ids=content_ids,
-                        files=files,
+                        urls=urls,
                         agents_used=agents_used,
                     )
                     
@@ -998,7 +979,7 @@ Write a **single, fluent, and conversational summary**:
                     assistant_answer=error_msg,
                     graph_id_referenced=graph_id,
                     content_ids=content_ids,
-                    files=files,
+                    urls=urls,
                     agents_used=[],
                 )
                 
@@ -1017,7 +998,7 @@ Write a **single, fluent, and conversational summary**:
                     assistant_answer=error_msg,
                     graph_id_referenced=graph_id,
                     content_ids=content_ids,
-                    files=files,
+                    urls=urls,
                     agents_used=[],
                 )
             except Exception as save_error:
@@ -1025,7 +1006,7 @@ Write a **single, fluent, and conversational summary**:
             
             return {
                 "text": error_msg,
-                "json_query": None
+                "json_format": None
             }
 
     def answer_from_graph_summaries(self, query, user_id, resource, token, graph_id):
@@ -1053,11 +1034,11 @@ Write a **single, fluent, and conversational summary**:
                 return "Invalid resource type specified."
                 
             # Return summary as dict for consistency
-            return {"text": summary_text, "json_query": None}
+            return {"text": summary_text, "json_format": None}
             
         except Exception as e:
             logger.error("Error in answer_from_graph_summaries", exc_info=True)
             return {
                 "text": f"Error processing query: {str(e)}",
-                "json_query": None
+                "json_format": None
             }

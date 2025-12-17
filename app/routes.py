@@ -32,9 +32,13 @@ def process_query(current_user_id, auth_token):
     """
     try:
         ai_assistant = current_app.config["ai_assistant"]
-        data = request.form
-
         user_id = current_user_id
+        
+        # uploaded files 
+        uploaded_files = request.files.getlist("uploaded_files") if "uploaded_files" in request.files else None
+        
+        # uploaded datas
+        data = request.form
         question = data.get("question") or data.get("query")
         context_raw = data.get("context", "{}")
         try:
@@ -47,6 +51,7 @@ def process_query(current_user_id, auth_token):
         url = context.get("url",None)
         graph = data.get("graph", None)
         json_query = data.get("json_query", None)
+
 
         if url:
             if isinstance(url, str):
@@ -73,6 +78,31 @@ def process_query(current_user_id, auth_token):
                         cid.strip() for cid in context_id.split(",") if cid.strip()
                     ]
 
+        # Handle file uploads
+        upload_results = []
+        newly_uploaded_content_ids = []
+
+        if uploaded_files:
+            for uploaded in uploaded_files:
+                if uploaded.filename and uploaded.filename.lower().endswith(".pdf"):
+                    response = ai_assistant.rag.save_retrievable_docs(uploaded, user_id)
+                    if isinstance(response, dict):
+                        is_duplicate = response.get("text") == "PDF already exists."
+                        if is_duplicate:
+                            pdf_files = mongo_db_manager.get_user_content_files(user_id, "pdf")
+                            existing = next((f for f in pdf_files if f.get("filename") == uploaded.filename), None)
+                            if existing:
+                                newly_uploaded_content_ids.append(existing.get("content_id"))
+                        else:
+                            new_id = response.get("resource", {}).get("content_id")
+                            if new_id:
+                                newly_uploaded_content_ids.append(new_id)
+                        upload_results.append({"filename": uploaded.filename, "response": response})
+            
+            # Merge content_ids
+            if newly_uploaded_content_ids:
+                content_ids = content_ids + newly_uploaded_content_ids if content_ids else newly_uploaded_content_ids
+
         # Ensure query exists before processing
         if not question and not json_query:
             return jsonify({"error": "No query provided."}), 400
@@ -84,7 +114,7 @@ def process_query(current_user_id, auth_token):
             graph_id=graph_id,
             resource=resource,
             content_ids=content_ids,
-            files=url
+            urls=url
         )
 
         return jsonify(response)
@@ -92,144 +122,6 @@ def process_query(current_user_id, auth_token):
         current_app.logger.error(f"Exception: {e}")
         traceback.print_exc()
         return f"Bad Response: {e}", 400
-
-
-@main_bp.route("/upload_content", methods=["POST"])
-@token_required
-def upload_content(current_user_id, auth_token):
-    """
-    Unified endpoint for uploading both PDF files and web content
-    Accepts either files (PDFs) or URLs (web content)
-    accepts a question to answer after upload (optional)
-    """
-    try:
-        user_id = current_user_id
-        question = request.form.get(
-            "question"
-        )  # Optional question to answer after upload
-        if not user_id:
-            return jsonify(error="Missing user_id"), 400
-
-        ai_assistant = current_app.config["ai_assistant"]
-        results = []
-
-        # Handle PDF files
-        if "files" in request.files:
-            files = request.files.getlist("files")
-            for uploaded in files:
-                if uploaded.filename and uploaded.filename.lower().endswith(".pdf"):
-                    response = ai_assistant.rag.save_retrievable_docs(uploaded, user_id)
-                    item = {"filename": uploaded.filename, "response": response}
-
-                    # Handle question answering for both new uploads and duplicates
-                    if question and isinstance(response, dict):
-                        content_id = None
-                        is_duplicate = response.get("text") == "PDF already exists."
-
-                        if is_duplicate:
-                            # Get the existing content ID for this filename
-                            pdf_files = mongo_db_manager.get_user_content_files(
-                                user_id, "pdf"
-                            )
-                            existing_content = next(
-                                (
-                                    f
-                                    for f in pdf_files
-                                    if f.get("filename") == uploaded.filename
-                                ),
-                                None,
-                            )
-                            if existing_content:
-                                content_id = existing_content.get("content_id")
-                                # Update the response text to indicate question was answered
-                                item["response"][
-                                    "text"
-                                ] = "PDF already exists, but question was answered using existing content."
-                        else:
-                            # New upload - get content_id from response
-                            content_id = response.get("resource", {}).get("content_id")
-
-                        # Answer the question if we have a content_id
-                        if content_id:
-                            try:
-                                answer = ai_assistant.assistant_response(
-                                    query=question,
-                                    user_id=user_id,
-                                    token=auth_token,
-                                    resource="content",
-                                    graph_id=None,
-                                    content_ids=[content_id],
-                                )
-                                item["answer"] = answer or {
-                                    "text": "No answer generated"
-                                }
-                            except Exception:
-                                traceback.print_exc()
-                                item["answer"] = {"text": "Error answering question"}
-
-                    results.append(item)
-                else:
-                    results.append(
-                        {
-                            "filename": uploaded.filename,
-                            "error": "Only PDF files are allowed.",
-                        }
-                    )
-
-        # Handle web URLs
-        urls = request.form.getlist("urls")
-        for url in urls:
-            if url and url.strip():
-                clean_url = url.strip()
-                response = ai_assistant.rag.save_web_content(clean_url, user_id)
-                item = {"url": clean_url, "response": response}
-
-                # Handle question answering for both new uploads and duplicates
-                if question and isinstance(response, dict):
-                    content_id = None
-                    is_duplicate = response.get("text") == "URL already exists."
-
-                    if is_duplicate:
-                        # Get the existing content ID for this URL
-                        web_files = mongo_db_manager.get_user_content_files(
-                            user_id, "web"
-                        )
-                        existing_content = next(
-                            (f for f in web_files if f.get("url") == clean_url), None
-                        )
-                        if existing_content:
-                            content_id = existing_content.get("content_id")
-                            # Update the response text to indicate question was answered
-                            item["response"][
-                                "text"
-                            ] = "URL already exists, but question was answered using existing content."
-                    else:
-                        # New upload - get content_id from response
-                        content_id = response.get("resource", {}).get("content_id")
-
-                    # Answer the question if we have a content_id
-                    if content_id:
-                        try:
-                            answer = ai_assistant.assistant_response(
-                                query=question,
-                                user_id=user_id,
-                                token=auth_token,
-                                resource="content",
-                                graph_id=None,
-                                content_ids=[content_id],
-                            )
-                            item["answer"] = answer or {"text": "No answer generated"}
-                        except Exception:
-                            traceback.print_exc()
-                            item["answer"] = {"text": "Error answering question"}
-
-                results.append(item)
-
-        return jsonify(results=results), 200
-    except Exception as e:
-        current_app.logger.error(f"Content upload error: {e}")
-        traceback.print_exc()
-        return jsonify(error=f"Error uploading content: {str(e)}"), 500
 
 
 @main_bp.route("/user_status/documents/", methods=["GET"])
