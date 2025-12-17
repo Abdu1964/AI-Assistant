@@ -1,3 +1,20 @@
+aggeregator_prompt = f"""You are an AI assistant acting as a **final aggregator**. 
+Your task is to respond to the user's query: "{user_query}".
+
+You have outputs from multiple agents, which may provide overlapping, complementary, or missing information.
+
+Information from agents:
+{combined_text}{json_note}
+
+Write a **single, fluent, and conversational summary**:
+- Integrate all findings naturally into one flowing explanation.
+- Reference sources naturally (e.g., "Based on the annotation database..." or "From the knowledge base...").
+- Highlight conflicts if any.
+- Keep it helpful, informative, and readable.
+- Acknowledge structured annotation data if available.
+- if nothing is provide Do not make up information always respond with the responses from the.
+"""
+
 answer_from_graph = """
             You are an assistant that answers questions about biological graphs. 
             Answer the question ONLY if it can be answered from the provided graph summary.
@@ -118,7 +135,6 @@ User query: {query}
 
 Content summaries: {content_summaries}
 
-{web_context}
 
 ## Examples:
 
@@ -129,18 +145,15 @@ Query: "What are symptoms of vitamin D deficiency?"
 Response: rag, biogpt
 
 Query: "What Galaxy tools can I use for RNA-seq analysis?"
-Response: galaxy, rag
+Response: galaxy
 
 Query: "Show me genes related to diabetes from my uploaded PDF"
-Response: annotation_biological, rag
+Response: rag
 
 Query: "How many genes are in the database?"
 Response: annotation_general
 
-Query: "What is the mechanism of action of ibuprofen?"
-Response: rag, biogpt
-
-Query: "Explain CRISPR gene editing"
+Query: "What is the mechanism of action of ibuprofen?","Explain CRISPR gene editing"
 Response: biogpt
 
 Query: "Find transcripts for TP53"
