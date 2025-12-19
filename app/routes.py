@@ -268,7 +268,7 @@ def delete_content(current_user_id, auth_token):
         # Handle PDF-specific deletion
         if content_type == "pdf" or content_file.get("content_type") == "pdf":
             # Remove PDF file from storage
-            pdf_path = os.path.join("storage/pdfs", f"{content_id}.pdf")
+            pdf_path = os.path.join("pdfs_uploaded/pdfs", f"{content_id}.pdf")
             if os.path.exists(pdf_path):
                 os.remove(pdf_path)
             else:
