@@ -1,3 +1,20 @@
+aggeregator_prompt = f"""You are an AI assistant acting as a **final aggregator**. 
+Your task is to respond to the user's query: "{user_query}".
+
+You have outputs from multiple agents, which may provide overlapping, complementary, or missing information.
+
+Information from agents:
+{combined_text}{json_note}
+
+Write a **single, fluent, and conversational summary**:
+- Integrate all findings naturally into one flowing explanation.
+- Reference sources naturally (e.g., "Based on the annotation database..." or "From the knowledge base...").
+- Highlight conflicts if any.
+- Keep it helpful, informative, and readable.
+- Acknowledge structured annotation data if available.
+- if nothing is provide Do not make up information always respond with the responses from the.
+"""
+
 answer_from_graph = """
             You are an assistant that answers questions about biological graphs. 
             Answer the question ONLY if it can be answered from the provided graph summary.
@@ -72,28 +89,80 @@ Example 3 (RELATED - general explanation request):
 - Output: "related: BTBD3 network showing basic connectivity with two source nodes on chromosome 20."
 """
 
-main_classifier_prompt = """
-Classify this user query into one or more of the following agent types. Multiple agents can handle the same query if applicable.
 
-Agent types:
-- annotation_biological: Requests to find, retrieve, or explore specific biological entities and their relationships (e.g., "find gene BRCA1", "show transcripts for TP53", "what exons does IGF1 have")
-- annotation_general: Requests for aggregate statistics, counts, or metadata about the database itself (e.g., "how many genes", "what types of variants", "database statistics")
-- galaxy: Requests about Galaxy web tools, workflows, or Galaxy platform capabilities
-- rag: General information requests, including queries about uploaded PDFs, web content, or document profiles
-- biogpt: Common biological questions that can be answered by BioGPT
+
+main_classifier_prompt = """
+You are a query classifier for a multi-agent system. Analyze the user's query and determine which agent(s) should handle it.
+
+**IMPORTANT**: You can select MULTIPLE agents if the query would benefit from different information sources.
+
+## Available Agent Types:
+
+1. **annotation_biological**: Queries about specific biological entities in the annotation database
+   - Finding/retrieving genes, proteins, transcripts, exons, variants
+   - Exploring relationships between biological entities
+   - Examples: "find gene BRCA1", "show transcripts for TP53", "what exons does IGF1 have"
+
+2. **annotation_general**: Queries about database statistics and metadata
+   - Aggregate counts, database size, data types available
+   - Examples: "how many genes in the database", "what types of variants are stored"
+
+3. **galaxy**: Queries about Galaxy bioinformatics platform
+   - Galaxy tools, workflows, pipeline recommendations
+   - Examples: "What Galaxy tools for RNA-seq?", "create a variant calling workflow"
+
+4. **rag**: General information queries and document retrieval
+   - Questions about uploaded PDFs, web content, user documents
+   - Background information that requires reading provided materials
+   - Examples: "summarize my uploaded PDF", "what does the document say about X"
+
+5. **biogpt**: Biomedical knowledge questions requiring specialized medical/biological expertise
+   - Medical symptoms, diseases, drug information
+   - Biological processes, mechanisms, pathways (general knowledge, not database-specific)
+   - Examples: "What are symptoms of vitamin D deficiency?", "How does insulin work?", "What is CRISPR?"
+
+## Classification Rules:
+
+- **Medical/health questions**: Use BOTH "rag, biogpt" for comprehensive answers
+- **Database queries about biological entities**: Use "annotation_biological" (add "rag" if explanation needed)
+- **Questions about uploaded documents**: Always include "rag"
+- **Galaxy platform questions**: Use "galaxy" (add "rag" for additional context)
+- **General biological knowledge**: Use "biogpt" (add "rag" if broader context helps)
+
+## Input:
 
 User query: {query}
 
 Content summaries: {content_summaries}
 
-{web_context}
 
-Examples:
-- "Find gene BRCA1 and tell me about its function" → annotation_biological, rag
-- "What Galaxy tools can I use for RNA-seq?" → galaxy, rag
-- "Show me genes related to diabetes from my uploaded PDF" → annotation_biological, rag
+## Examples:
 
-Respond ONLY with a comma-separated list of agent types that should handle this query.
-If the query clearly relates to only one agent, return just that one.
-"""
+Query: "Find gene BRCA1 and tell me about its function"
+Response: annotation_biological, rag
+
+Query: "What are symptoms of vitamin D deficiency?"
+Response: rag, biogpt
+
+Query: "What Galaxy tools can I use for RNA-seq analysis?"
+Response: galaxy
+
+Query: "Show me genes related to diabetes from my uploaded PDF"
+Response: rag
+
+Query: "How many genes are in the database?"
+Response: annotation_general
+
+Query: "What is the mechanism of action of ibuprofen?","Explain CRISPR gene editing"
+Response: biogpt
+
+Query: "Find transcripts for TP53"
+Response: annotation_biological
+
+## Your Response:
+
+Respond with ONLY a comma-separated list of agent types (no explanation, no extra text).
+Examples of valid responses: "rag, biogpt" or "annotation_biological" or "galaxy, rag"
+
+Classification:"""
 
