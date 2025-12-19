@@ -11,7 +11,7 @@ import uuid
 import requests
 import trafilatura
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from langchain_text_splitters.character import RecursiveCharacterTextSplitter
 from qdrant_client import models
 from app.llm_handle.llm_models import get_llm_model
@@ -25,7 +25,7 @@ class HTMLProcessor:
         self.qdrant = qdrant_client
         # MUCH SMALLER CHUNKS - better for embeddings
         self.splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1500,  # Changed from 8000
+            chunk_size=1000,  # Changed from 8000
             chunk_overlap=200
         )
         self.llm = llm
@@ -82,17 +82,17 @@ class HTMLProcessor:
         return text
 
 
-    def extract_html(self, source: str) -> Optional[str]:
+    def extract_html(self, source: Union[str, List[str]]) -> Optional[str]:
         """
         Extracts clean text content from a URL using Trafilatura.
+        Now properly handles both single URLs and lists of URLs.
         """
-
         # Handle list input (e.g., [url])
         if isinstance(source, list):
             if not source:
                 logger.warning("Empty source list provided")
                 return None
-        source = source[0]
+            source = source[0]
 
         url = str(source).strip()
         logger.info(f"Attempting Trafilatura extraction for {url}")
@@ -106,7 +106,7 @@ class HTMLProcessor:
             text = trafilatura.extract(
                 downloaded,
                 include_comments=False,
-                include_tables=False,
+                include_tables=True,
                 favor_precision=True,
             )
             if not text:
@@ -125,22 +125,22 @@ class HTMLProcessor:
         text = re.sub(r'^\s*$', '', text, flags=re.MULTILINE)
 
         text = text.strip()
-        logger.info(f"✅ Extracted and cleaned text length: {len(text)} chars")
-
+        logger.info(f"Extracted and cleaned text length: {len(text)} chars")
+        logger.info(f"Cleaned text content: {text}")
         return text
 
-           
-    def _summarize_with_llm(self, text):
+
+    def _summarize_with_llm(self, text, previous_summary=None):
         """Create DETAILED summary capturing all key information"""
         prompt = f"""
 You are analyzing scientific/technical content. Create a comprehensive, detailed summary.
-
+this summary would be embedded and used to answer every question on the document so well preserve ALL important details.
 REQUIREMENTS:
 1. Capture ALL important details, numbers, statistics, findings
 2. Include specific values, percentages, counts mentioned
 3. Preserve technical terms and methodology details
 4. List all key topics and concepts discussed
-5. Keep the summary well-structured and clear
+5. Keep the summary well-structured and clear reports
 
 Return ONLY valid JSON (no markdown, no extra text) with this EXACT structure:
 {{
@@ -148,8 +148,9 @@ Return ONLY valid JSON (no markdown, no extra text) with this EXACT structure:
 }}
 
 TEXT TO ANALYZE:
-{text[:4000]}
-
+{text}
+previous summary from the previous chunk (for context):
+{previous_summary if previous_summary else "N/A"}
 Remember: Return ONLY the JSON object, nothing else.
 """
         
@@ -172,75 +173,94 @@ Remember: Return ONLY the JSON object, nothing else.
                 return str(result)
                 
         except Exception as e:
-            print(f"⚠️ Summary generation failed: {e}")
+            logger.warning(f"⚠️ Summary generation failed: {e}")
             # Fallback: use first 500 chars as summary
             return text[:500].replace('\n', ' ').strip()
 
-    def store_embedded(self, url: str, collection_name: str):
-        """Process URL and store in Qdrant with detailed summaries."""
-        html_text = self.extract_html(url)
-        if not html_text:
-            return "Failed to extract HTML"
-        print(html_text)
-        cleaned_text = self.deep_clean_text(html_text)
-        print(cleaned_text)
-        chunks = self.splitter.split_text(html_text)
-        for i, chunk in enumerate(chunks):
-            print(chunk)
-            summary_text = self._summarize_with_llm(chunk)
+    def store_embedded(self, urls: Union[str, List[str]], collection_name: str) -> Dict[str, str]:
+        """
+        Process single or multiple URLs and store in Qdrant with detailed summaries.
+        
+        Args:
+            urls: Single URL string or list of URL strings
+            collection_name: Name of the Qdrant collection
             
-            # Metadata per chunk, content_id as string
-            chunk_metadata = {
-                "content_id": url,       # string, not list
-                "summary": summary_text,
-                "chunk_index": i
-            }
+        Returns:
+            Dictionary with status for each URL
+        """
+        # Normalize to list
+        if isinstance(urls, str):
+            urls = [urls]
+        
+        results = {}
+        collection_created = False
+        
+        for url in urls:
+            try:
+                logger.info(f"Processing URL: {url}")
+                
+                # Step 1: Extract content
+                html_text = self.extract_html(url)
+                if not html_text:
+                    logger.warning(f"Failed to extract HTML from {url}")
+                    results[url] = "Failed to extract HTML"
+                    continue
+                    
+                logger.info(f"Extracted text length: {len(html_text)}")
+                logger.info(f"Extracted text preview: {html_text}")
+                # Step 2: Clean and chunk
+                cleaned_text = self.deep_clean_text(html_text)
+                chunks = self.splitter.split_text(cleaned_text)
+                if not chunks:
+                    logger.warning(f"No chunks created from {url}")
+                    results[url] = "No content to process"
+                    continue
+                
+                logger.info(f"📦 Processing {len(chunks)} chunks for {url}")
+                
+                # Step 3: ONLY NOW create collection (we have valid content!)
+                if not collection_created:
+                    self.qdrant.ensure_collection_exists(collection_name)
+                    collection_created = True
+                    logger.info(f"Collection '{collection_name}' ensured to exist")
+                
+                # Step 4: Process and store each chunk
+                prev_summary = None  
+                for i, chunk in enumerate(chunks):
 
-            # Upsert each chunk
-            self.qdrant.upsert_data(
-                collection_name=collection_name,
-                data=None,
-                is_content=True,
-                chunks=[chunk],          # single chunk
-                metadata=chunk_metadata   # single dict
-            )
-            logger.info(f"chunk{i} is saved in qdrant")
-        logger.info(f"📦 finsihed chunking {len(chunks)} chunks")
-        # Process each chunk with detailed summary
-        enhanced_data = []
-        for i, chunk in enumerate(chunks):
-            print(f"  Processing chunk {i+1}/{len(chunks)}...")
-            
-            summary_text = self._summarize_with_llm(chunk)
-            
-            enhanced_data.append({
-                "text": chunk,
-                "content_id": url,
-                "summary": summary_text,
-                "chunk_index": i
-            })
-        
-        # Insert in batches
-        self.qdrant.ensure_collection_exists(collection_name)
-        
-        for i in range(0, len(enhanced_data), self.qdrant.batch_size):
-            batch_data = enhanced_data[i : i + self.qdrant.batch_size]
-            
-            texts = [item["text"] for item in batch_data]
-            embeddings = self.qdrant._get_embeddings(texts)
-            
-            points = []
-            for item, emb in zip(batch_data, embeddings):
-                point_id = str(uuid.uuid4())
-                points.append(
-                    models.PointStruct(
-                        id=point_id,
-                        vector=emb,
-                        payload=item
+                    # Pass only the previous summary for context
+                    summary_text = self._summarize_with_llm(
+                        text=chunk,
+                        previous_summary=prev_summary
                     )
-                )
-            
-            self.qdrant.client.upsert(collection_name=collection_name, points=points)
+                    logger.info(f"Chunk {i} summary: {summary_text}")
+                    # Update prev_summary for the next iteration
+                    prev_summary = summary_text
+
+                    chunk_metadata = {
+                        "content_id": url,
+                        "chunk_index": i,
+                        "summary": summary_text,
+                        "text": chunk
+                    }
+
+                    # Store both the raw chunk and its summary
+                    self.qdrant.upsert_data(
+                        collection_name=collection_name,
+                        data=None,
+                        is_content=True,
+                        chunks=[{
+                            "text": chunk,
+                            "summary": summary_text
+                        }],
+                        metadata=chunk_metadata
+                    )
+
+                results[url] = f"Successfully processed {len(chunks)} chunks"
+                logger.info(f"✅ Completed processing {url}")
+                
+            except Exception as e:
+                logger.error(f"Error processing URL {url}: {e}")
+                results[url] = f"Error: {str(e)}"
         
-        print(f"✅ Stored {len(chunks)} chunks to Qdrant")
-        return f"Successfully processed {len(chunks)} chunks"
+        return results

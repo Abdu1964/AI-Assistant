@@ -7,6 +7,10 @@ ENV POETRY_HTTP_TIMEOUT=600
 # Set the working directory
 WORKDIR /AI-Assistant
 
+
+# Create log directory here
+RUN mkdir -p /AI-Assistant/logfiles
+
 # Install Poetry
 RUN pip install poetry
 
