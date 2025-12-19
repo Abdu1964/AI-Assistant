@@ -91,7 +91,7 @@ def create_app():
     schema_handler = SchemaHandler(
         schema_config_path="./config/schema_config.yaml",
         biocypher_config_path="./config/biocypher_config.yaml",
-        enhanced_schema_path="./config/enhanced_schema.txt",
+        enhanced_schema_path="./config/new_enhanced_schema.txt",
     )
     logger.info("SchemaHandler initialized")
 
@@ -117,8 +117,26 @@ def create_app():
     )
     logger.info("ADVANCED LLM model initialized successfully")
 
-    embedding_model = sentence_transformer_embedding_model
-    vector_size = get_embedding_vector_size(embedding_model)
+    embedding = os.getenv("EMBEDDING_MODEL","sentence_transformer")
+    if embedding=="openai":
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            raise ValueError("OpenAI API key not found")
+        else:
+            embedding_model = openai_embedding_model
+            vector_size = get_embedding_vector_size(embedding_model)
+
+    elif embedding=="gemini":
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("OpenAI API key not found")
+        else:
+            embedding_model = gemini_embedding_model
+            vector_size = get_embedding_vector_size(embedding_model)
+    elif embedding =="sentence_transformer":
+        embedding_model = sentence_transformer_embedding_model
+        vector_size = get_embedding_vector_size(embedding_model)
+
     qdrant_client = Qdrant(embedding_model=embedding_model, vector_size=vector_size)
     app.config["qdrant_client"] = qdrant_client
     app.config["embedding_model"] = embedding_model
@@ -127,15 +145,16 @@ def create_app():
     # Check for SITE_INFORMATION collection and upload sample data if needed
     try:
         try:
-            qdrant_client.client.get_collection("SITE_INFORMATION")
+            collection = os.getenv("VECTOR_COLLECTION")
+            qdrant_client.client.get_collection(collection_name=collection)
             logger.info(
-                "SITE_INFORMATION collection already exists, skipping population data"
+                "collection already exists, skipping population data"
             )
         except Exception as e:
             # Check if the error is because the collection does not exist
             if "not found" in str(e).lower() or "404" in str(e):
                 logger.info(
-                    "SITE_INFORMATION collection not found, uploading sample web data to qdrant db"
+                    "collection not found, uploading sample web data to qdrant db"
                 )
                 with open("sample_data.json") as data:
                     sample_site_data = json.load(data)
@@ -148,20 +167,20 @@ def create_app():
                 # Upload the data to the specified collection
                 rag.save_doc_to_rag(
                     data=sample_site_data,
-                    collection_name="SITE_INFORMATION",
+                    collection_name=collection,
                     is_content=False,
                 )
-                logger.info("Successfully populated SITE_INFORMATION collection.")
+                logger.info("Successfully populated SITE INFORMATION collection.")
             else:
                 # Log any other unexpected errors during collection check
                 logger.error(
-                    f"An unexpected error occurred when checking for SITE_INFORMATION collection: {e}",
+                    f"An unexpected error occurred when checking for SITE INFORMATION collection: {e}",
                     exc_info=True,
                 )
 
     except Exception as e:
         logger.error(
-            f"An error occurred during the application setup for SITE_INFORMATION: {e}",
+            f"An error occurred during the application setup for SITE INFORMATION: {e}",
             exc_info=True,
         )
 
@@ -177,6 +196,7 @@ def create_app():
         schema_handler,
         embedding_model=embedding_model,
         qdrant_client=qdrant_client,
+        mongo_db_manager=mongo_db_manager,
     )
     logger.info("AiAssistance initialized")
 
