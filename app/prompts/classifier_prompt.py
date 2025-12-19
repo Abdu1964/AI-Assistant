@@ -1,4 +1,4 @@
-aggeregator_prompt = f"""You are an AI assistant acting as a **final aggregator**. 
+aggeregator_prompt = """You are an AI assistant acting as a **final aggregator**. 
 Your task is to respond to the user's query: "{user_query}".
 
 You have outputs from multiple agents, which may provide overlapping, complementary, or missing information.
