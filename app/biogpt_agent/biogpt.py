@@ -24,11 +24,14 @@ class BioGPTAgent:
         self.llm = llm  
         
         # Performance settings for minimal RAM and optimized CPU inference
+        # Use environment variable for threads to allow scaling between local and server
+        num_threads = os.getenv("BIOGPT_THREADS", "1")
+        
         self.ultra_lean_config = {
             "PERFORMANCE_HINT": "LATENCY",
             "ENABLE_MMAP": "YES",
             "CACHE_DIR": "",
-            "INFERENCE_NUM_THREADS": "1",         
+            "INFERENCE_NUM_THREADS": num_threads,         
             "NUM_STREAMS": "1",                  
             "KV_CACHE_PRECISION": "u8",          
         }
@@ -38,12 +41,57 @@ class BioGPTAgent:
         process = psutil.Process(os.getpid())
         return process.memory_info().rss / (1024 * 1024)
 
+    def _manage_cache_size(self, limit_gb=5.0):
+        """Enforces a size limit on the cache directory by deleting oldest files."""
+        cache_dir = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+        if not os.path.exists(cache_dir):
+            return
+
+        limit_bytes = limit_gb * 1024 * 1024 * 1024
+        files = []
+        total_size = 0
+
+        # 1. Scan all files
+        for dirpath, _, filenames in os.walk(cache_dir):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                try:
+                    stat = os.stat(fp)
+                    total_size += stat.st_size
+                    files.append((stat.st_mtime, stat.st_size, fp))
+                except OSError:
+                    continue
+
+        # 2. Check if cleanup is needed
+        if total_size > limit_bytes:
+            logger.warning(f"Cache size ({total_size/1e9:.2f}GB) exceeds limit ({limit_gb}GB). Cleaning up...")
+            
+            # 3. Sort by oldest modified time first
+            files.sort(key=lambda x: x[0])
+            
+            deleted_size = 0
+            for _, size, fp in files:
+                if total_size - deleted_size <= limit_bytes:
+                    break # Target reached
+                
+                try:
+                    os.remove(fp)
+                    deleted_size += size
+                    logger.info(f"Deleted old cache file: {fp} ({size/1e6:.1f}MB)")
+                except OSError as e:
+                    logger.error(f"Failed to delete {fp}: {e}")
+
+            logger.info(f"Cache cleanup complete. Freed {deleted_size/1e9:.2f}GB.")
+
     def _load_if_needed(self):
         """Load model/tokenizer once lazily using OpenVINO."""
         if BioGPTAgent._model is None:
             with BioGPTAgent._lock:
                 # double-check inside lock
                 if BioGPTAgent._model is None:
+                    # Manage cache size before loading to prevent disk overflow
+                    self._manage_cache_size()
+                    
                     start_ram = self._get_ram_usage()
                     logger.info(f"Lazy-loading OpenVINO BioGPT model: {self.model_name}...")
                     logger.info(f"Base RAM Usage: {start_ram:.2f} MB")
@@ -89,7 +137,11 @@ class BioGPTAgent:
                     **inputs,
                     max_new_tokens=150,  # Generate up to 150 new tokens
                     pad_token_id=BioGPTAgent._tokenizer.eos_token_id,
-                    use_cache=True  # Enable key/value cache for faster generation
+                    use_cache=True,      # Enable key/value cache for faster generation
+                    do_sample=True,      # Enable sampling for non-deterministic responses
+                    temperature=0.7,     # Control randomness (higher = more creative)
+                    top_k=50,            # Sample from top 50 most likely tokens
+                    top_p=0.95           # Nucleus sampling
                 )
 
             # Decode the generated text
