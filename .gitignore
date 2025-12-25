@@ -12,6 +12,6 @@ test.py
 rag_user_pdf.json
 *.lock
 pdfs_uploaded
+.infisical.json
 /tmp
 /storage
-.infisical.json
