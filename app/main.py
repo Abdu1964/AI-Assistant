@@ -782,12 +782,10 @@ class AiAssistance:
             response_text = response.get("text", "")
             user_query = state.get("user_query", "")
             
-            # Only generate questions if we have a meaningful response
             if not response_text or len(response_text.strip()) < 20:
                 logger.info("Response too short, skipping question generation")
                 return {"suggested_questions": []}
             
-            # Generate questions using LLM
             from app.prompts.rag_prompts import CLARIFYING_QUESTIONS_PROMPT
             
             prompt = CLARIFYING_QUESTIONS_PROMPT.format(
@@ -797,21 +795,18 @@ class AiAssistance:
             
             result = self.basic_llm.generate(prompt)
             
-            # Parse the questions (assuming numbered list format)
             questions = []
             if result:
                 lines = result.strip().split('\n')
                 for line in lines:
                     line = line.strip()
-                    # Remove numbering (1., 2., etc.) and bullet points
                     if line and (line[0].isdigit() or line.startswith('-') or line.startswith('•')):
-                        # Extract question text
                         if '.' in line and line[0].isdigit():
                             question = line.split('.', 1)[-1].strip()
                         else:
                             question = line.strip('- •').strip()
                         
-                        if question and len(question) > 5:  # Ensure it's a meaningful question
+                        if question and len(question) > 5: 
                             questions.append(question)
             
             logger.info(f"Generated {len(questions)} clarifying questions")
@@ -830,17 +825,14 @@ class AiAssistance:
         
         logger.info(f"Finalizing response for user: {user_id}")
         
-        # Ensure response has correct structure
         if not isinstance(response, dict):
             response = {"text": str(response), "json_format": None}
         response.setdefault("text", "")
 
-        # Add suggested questions to response if available
         if suggested_questions:
             response["suggested_questions"] = suggested_questions
             logger.info(f"Added {len(suggested_questions)} suggested questions to response")
 
-        # Emit final response
         emit_to_user(user=user_id, message=response, status="completed")
         
         return {"response": response}
@@ -860,7 +852,6 @@ class AiAssistance:
             f"Agent called with message: {message}, user_id: {user_id}, "
             f"content_ids: {content_ids}, graph_id: {graph_id}, urls: {urls}"
         )
-        # return  {"text" :self.biogpt.generate_answer(message)}
            
         try:
             # Create initial state
