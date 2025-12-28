@@ -4,7 +4,7 @@ on:
   push:
     branches: [ staging ]
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, closed]   
     branches: [staging]
 
 env:
@@ -13,6 +13,10 @@ env:
 
 jobs:
   build-and-validate-assistant:
+    # Run on all PR events OR on push to staging
+    if: |
+      (github.event_name == 'pull_request') || 
+      (github.event_name == 'push')
     runs-on: ubuntu-latest
 
     outputs:
@@ -23,12 +27,49 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+
+    - name: Free up disk space
+      run: |
+        echo "=== Disk space before cleanup ==="
+        df -h
+        
+        echo "=== Removing unnecessary packages ==="
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo rm -rf /usr/local/share/boost
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+        
+        echo "=== Cleaning Docker ==="
+        docker system prune -af --volumes
+        
+        echo "=== Disk space after cleanup ==="
+        df -h
+     
+    - name: Check if this is a merge commit (for push events)
+      id: check-merge
+      run: |
+        if [ "${{ github.event_name }}" == "push" ]; then
+          if [ $(git rev-list --parents -n 1 HEAD | wc -w) -gt 2 ]; then
+            echo "is_merge=true" >> $GITHUB_OUTPUT
+            echo "This is a merge commit from a PR"
+          else
+            echo "is_merge=false" >> $GITHUB_OUTPUT
+            echo "This is a direct push, not a merge"
+          fi
+        else
+          echo "is_merge=false" >> $GITHUB_OUTPUT
+        fi
      
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
      
     - name: Login to Docker Hub
-      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+      # Only login on push events that are merges  
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true'
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_HUB_USERNAME }}
@@ -37,7 +78,9 @@ jobs:
     - name: Create .env file
       run: |
         echo "=== Creating .env file from GitHub Secrets ==="
-        # Port Configuration
+        
+        # Port Configuration  
+        
         echo "FLASK_HOST_PORT=${{ secrets.FLASK_HOST_PORT }}" >> .env
         echo "FLASK_INTERNAL_PORT=${{ secrets.FLASK_INTERNAL_PORT }}" >> .env
         echo "REDIS_HOST_PORT=${{ secrets.REDIS_HOST_PORT }}" >> .env
@@ -49,26 +92,24 @@ jobs:
         echo "QDRANT_GRPC_HOST_PORT=${{ secrets.QDRANT_GRPC_HOST_PORT }}" >> .env
         echo "QDRANT_GRPC_INTERNAL_PORT=${{ secrets.QDRANT_GRPC_INTERNAL_PORT }}" >> .env
         
-        # Application Configuration
-        echo "BASIC_LLM_PROVIDER=${{ secrets.BASIC_LLM_PROVIDER }}" >> .env
-        echo "BASIC_LLM_VERSION=${{ secrets.BASIC_LLM_VERSION }}" >> .env
-        echo "ADVANCED_LLM_PROVIDER=${{ secrets.ADVANCED_LLM_PROVIDER }}" >> .env
-        echo "ADVANCED_LLM_VERSION=${{ secrets.ADVANCED_LLM_VERSION }}" >> .env
-        echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
-        echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
-        echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
-        echo "MODEL_PATH=${{ secrets.MODEL_PATH }}" >> .env
-        echo "VECTOR_COLLECTION=${{ secrets.VECTOR_COLLECTION }}" >> .env
+        # Application Configuration  
+        echo "BASIC_LLM_PROVIDER=${{ secrets.BASIC_LLM_PROVIDER || 'gemini' }}" >> .env
+        echo "BASIC_LLM_VERSION=${{ secrets.BASIC_LLM_VERSION || 'gemini-1.5-flash' }}" >> .env
+        echo "ADVANCED_LLM_PROVIDER=${{ secrets.ADVANCED_LLM_PROVIDER || 'gemini' }}" >> .env
+        echo "ADVANCED_LLM_VERSION=${{ secrets.ADVANCED_LLM_VERSION || 'gemini-1.5-pro' }}" >> .env
+        echo "GEMINI_API_KEY=dummy-gemini-key-for-ci" >> .env
+        echo "OPENAI_API_KEY=dummy-openai-key-for-ci" >> .env
+        echo "JWT_SECRET=${{ secrets.JWT_SECRET || 'dummy-jwt-secret-for-ci' }}" >> .env
+        echo "MODEL_PATH=${{ secrets.MODEL_PATH || './models' }}" >> .env
+        echo "VECTOR_COLLECTION=${{ secrets.VECTOR_COLLECTION || 'test' }}" >> .env
         
-        # Database Configuration
-        echo "MONGO_USERNAME=${{ secrets.MONGO_USERNAME }}" >> .env
-        echo "MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD }}" >> .env
-        echo "MONGO_DATABASE=${{ secrets.MONGO_DATABASE }}" >> .env
+        # Database Configuration - use dummy credentials
+        echo "MONGO_USERNAME=${{ secrets.MONGO_USERNAME || 'test' }}" >> .env
+        echo "MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD || 'test' }}" >> .env
+        echo "MONGO_DATABASE=${{ secrets.MONGO_DATABASE || 'test' }}" >> .env
         
         echo "=== .env file created successfully ==="
-        echo "Contents:"
         cat .env
-
     - name: Create docker-compose for CI
       run: |
         echo "=== Creating docker-compose.ci.yml ==="
@@ -80,6 +121,7 @@ jobs:
               dockerfile: Dockerfile
             volumes:
               - .:/AI-Assistant:rw
+              - logfiles:/AI-Assistant/logfiles
               - static:/static
             ports:
               - "${FLASK_HOST_PORT}:${FLASK_INTERNAL_PORT}"
@@ -113,7 +155,6 @@ jobs:
               REDIS_HOST: redis
               REDIS_INTERNAL_PORT: ${REDIS_INTERNAL_PORT}
               REDIS_URL: redis://redis:${REDIS_INTERNAL_PORT}/0
-
               # MongoDB Configuration
               MONGODB_HOST: mongodb
               MONGODB_INTERNAL_PORT: ${MONGODB_INTERNAL_PORT}
@@ -125,7 +166,6 @@ jobs:
               # Vector Database Configuration
               QDRANT_CLIENT: http://qdrant:${QDRANT_INTERNAL_PORT}
               VECTOR_COLLECTION: ${VECTOR_COLLECTION}
-
           qdrant:
             image: qdrant/qdrant:latest
             ports: 
@@ -133,13 +173,11 @@ jobs:
               - "${QDRANT_GRPC_HOST_PORT}:${QDRANT_GRPC_INTERNAL_PORT}"
             volumes:
               - vectordata:/qdrant/storage
-
           redis:
             image: redis:6-alpine
             restart: always
             ports:
               - "${REDIS_HOST_PORT}:${REDIS_INTERNAL_PORT}"
-
           mongodb:
             image: mongo:6.0
             restart: always
@@ -151,19 +189,19 @@ jobs:
               MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
             volumes:
               - mongodb_data:/data/db
-
         volumes:
           vectordata:
           static:
           mongodb_data:
+          logfiles:
         EOF
-
         echo "=== docker-compose.ci.yml created successfully ==="
-
     - name: Build and Validate Assistant Container
       id: validate-container
       run: |
         echo "=== Building and Validating AI Assistant Service ==="
+        echo "Event: ${{ github.event_name }}"
+        echo "Action: ${{ github.event.action }}"
         
         # Build the image using docker compose 
         echo "=== Building Docker images ==="
@@ -219,10 +257,14 @@ jobs:
         echo "=== DOCKER COMPOSE STATUS ==="
         docker compose -f docker-compose.ci.yml ps
         
-        # Test MongoDB connection
+        # Test MongoDB connection (only with real secrets)
         echo ""
         echo "=== Testing MongoDB Connection ==="
-        docker compose -f docker-compose.ci.yml exec -T mongodb mongosh -u ${{ secrets.MONGO_USERNAME }} -p ${{ secrets.MONGO_PASSWORD }} --authenticationDatabase admin --eval "db.runCommand({ping: 1})" ${{ secrets.MONGO_DATABASE }} || echo "MongoDB connection test failed"
+        if [ "${{ github.event_name }}" == "push" ]; then
+          docker compose -f docker-compose.ci.yml exec -T mongodb mongosh -u ${{ secrets.MONGO_USERNAME }} -p ${{ secrets.MONGO_PASSWORD }} --authenticationDatabase admin --eval "db.runCommand({ping: 1})" ${{ secrets.MONGO_DATABASE }} || echo "MongoDB connection test failed"
+        else
+          echo "Skipping MongoDB auth test for PR validation (using dummy credentials)"
+        fi
         
         # Final validation
         echo ""
@@ -241,18 +283,14 @@ jobs:
         # Test application health
         APP_HEALTHY=true
         echo "=== Testing application health endpoint ==="
-
         # SET THE VARIABLE from GitHub Secret
-        FLASK_HOST_PORT=${{ secrets.FLASK_HOST_PORT }}
+        FLASK_HOST_PORT=${{ secrets.FLASK_HOST_PORT || '5000' }}
         echo "Testing health on port: ${FLASK_HOST_PORT}"
-
         # Debug: Check what's actually running
         echo "=== Debug: Container port mapping ==="
         docker port ai-assistant-assistant-1
-
         echo "=== Debug: Testing connectivity ==="
         curl -v http://localhost:${FLASK_HOST_PORT}/ 2>&1 | head -20 || echo "Curl failed with detailed output above"
-
         if curl -f http://localhost:${FLASK_HOST_PORT}/health 2>/dev/null || \
           curl -f http://localhost:${FLASK_HOST_PORT}/ 2>/dev/null; then
           echo "[SUCCESS] Application is responding"
@@ -260,8 +298,20 @@ jobs:
           echo "[ERROR] Application is NOT responding"
           APP_HEALTHY=false
         fi
+        
+        # Overall validation result
+        if [[ "$INFRA_RUNNING" == "true" && "$APP_HEALTHY" == "true" ]]; then
+          echo ""
+          echo "✅ [SUCCESS] All validations passed!"
+        else
+          echo ""
+          echo "❌ [FAILED] Validation failed"
+          exit 1
+        fi
+        
     - name: Tag and Push Image to Docker Hub
-      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && steps.validate-container.outcome == 'success'
+      # Only push when: it's a push event + it's a merge commit + validation passed
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true' && steps.validate-container.outcome == 'success'
       run: |
         echo "=== Tagging and pushing Assistant image to Docker Hub ==="
         
@@ -274,13 +324,11 @@ jobs:
         
         echo "[SUCCESS] Image pushed successfully to Docker Hub"
         echo "Image: $IMAGE_TAG"
-
     - name: Set deployment trigger
-      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && steps.validate-container.outcome == 'success'
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true' && steps.validate-container.outcome == 'success'
       id: deployment-trigger
       run: |
         echo "docker_pushed=true" >> $GITHUB_OUTPUT
-
     - name: Cleanup Docker Compose
       if: always()
       run: |
@@ -288,7 +336,6 @@ jobs:
         docker compose -f docker-compose.ci.yml down -v
         rm -f docker-compose.ci.yml
         rm -f .env
-
     - name: Cleanup Docker system
       if: always()
       run: |
@@ -296,9 +343,8 @@ jobs:
         docker system prune -f
         echo "=== Disk space after cleanup ==="
         df -h
-
     - name: Trigger CD workflow via Repository Dispatch
-      if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && steps.validate-container.outcome == 'success'
+      if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true' && steps.validate-container.outcome == 'success'
       run: |
         curl -L -X POST \
           -H "Accept: application/vnd.github+json" \
@@ -307,7 +353,6 @@ jobs:
           https://api.github.com/repos/${{ github.repository }}/dispatches \
           -d '{"event_type":"deploy-staging","client_payload":{"image_tag":"${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"}}'
         echo "[SUCCESS] CD workflow triggered successfully!"
-
   validation-summary:
     runs-on: ubuntu-latest
     needs: build-and-validate-assistant
@@ -316,11 +361,16 @@ jobs:
     - name: Summary
       run: |
         echo "=== CI/CD Validation Summary ==="
+        echo "Event: ${{ github.event_name }}"
         echo "Assistant Validation: ${{ needs.build-and-validate-assistant.outputs.validation-status }}"
         
         if [[ "${{ needs.build-and-validate-assistant.outputs.validation-status }}" == "success" ]]; then
-          echo "[SUCCESS] SUCCESS: AI Assistant built, validated, and pushed to Docker Hub!"
-          echo "*** Image: ${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "[SUCCESS] SUCCESS: AI Assistant built, validated, and pushed to Docker Hub!"
+            echo "*** Image: ${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"
+          else
+            echo "[SUCCESS] PR validation passed - ready to merge!"
+          fi
         else
           echo "[ERROR] FAILED: Validation did not pass. Check the build-and-validate-assistant job for details."
           exit 1
