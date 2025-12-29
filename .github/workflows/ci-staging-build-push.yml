@@ -50,7 +50,7 @@ jobs:
         SONAR_HOST_URL: http://${{ secrets.HETZNER_IP }}:9000
       with:
         args: >
-          -Dsonar.projectKey=ai-assistant
+          -Dsonar.projectKey=AI-Assistant
           -Dsonar.sources=app
           -Dsonar.tests=tests
           -Dsonar.python.coverage.reportPaths=coverage.xml
