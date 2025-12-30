@@ -646,7 +646,6 @@ jobs:
           -d '{"event_type":"deploy-staging","client_payload":{"image_tag":"${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"}}'
         echo "[SUCCESS] CD workflow triggered successfully!"
 
-  # Slack Notifications
   # Email Notifications
   notify-success:
     runs-on: ubuntu-latest
@@ -661,7 +660,7 @@ jobs:
         username: ${{ secrets.EMAIL_USERNAME }}
         password: ${{ secrets.EMAIL_PASSWORD }}
         subject: ✅ CI Pipeline SUCCESS - AI-Assistant
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
+        to: ${{ secrets.NOTIFICATION_EMAIL }}  # ← ADD THIS LINE
         from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
         body: |
           CI Pipeline Completed Successfully! ✅
@@ -688,7 +687,7 @@ jobs:
         username: ${{ secrets.EMAIL_USERNAME }}
         password: ${{ secrets.EMAIL_PASSWORD }}
         subject: ❌ CI Pipeline FAILED - AI-Assistant
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
+        to: ${{ secrets.NOTIFICATION_EMAIL }}   
         from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
         body: |
           CI Pipeline Failed! ❌
