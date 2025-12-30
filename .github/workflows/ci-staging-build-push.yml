@@ -660,7 +660,7 @@ jobs:
         username: ${{ secrets.EMAIL_USERNAME }}
         password: ${{ secrets.EMAIL_PASSWORD }}
         subject: ✅ CI Pipeline SUCCESS - AI-Assistant
-        to: ${{ secrets.NOTIFICATION_EMAIL }}  # ← ADD THIS LINE
+        to: abdum14@gmail.com
         from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
         body: |
           CI Pipeline Completed Successfully! ✅
@@ -687,7 +687,7 @@ jobs:
         username: ${{ secrets.EMAIL_USERNAME }}
         password: ${{ secrets.EMAIL_PASSWORD }}
         subject: ❌ CI Pipeline FAILED - AI-Assistant
-        to: ${{ secrets.NOTIFICATION_EMAIL }}   
+        to: abdum14@gmail.com
         from: GitHub Actions <${{ secrets.EMAIL_USERNAME }}>
         body: |
           CI Pipeline Failed! ❌
