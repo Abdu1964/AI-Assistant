@@ -488,7 +488,7 @@ jobs:
     
     - name: Upload Trivy results to GitHub Security
       if: always() && steps.validate-container.outcome == 'success'
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: 'trivy-results.sarif'
 
