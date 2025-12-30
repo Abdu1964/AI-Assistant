@@ -732,7 +732,7 @@ class AiAssistance:
             if json_format:
                 json_note = "\n\nNote: Structured annotation data is also available for this query."
 
-            prompt = aggeregator_prompt.format(user_query=user_query, combined_responses=combined_text, json_note=json_note)
+            prompt = aggeregator_prompt.format(user_query=user_query, combined_text=combined_text, json_note=json_note)
 
             aggregated_text = self.advanced_llm.generate(prompt)
             logger.info(f"Successfully aggregated response: {aggregated_text[:100]}...")
