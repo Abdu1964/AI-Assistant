@@ -429,6 +429,63 @@ def clear_user_history(current_user_id, auth_token):
         return jsonify(error=f"Error clearing history: {str(e)}"), 500
 
 
+
+@main_bp.route("/faq", methods=["GET"])
+def get_faq_intro():
+    """
+    Get welcome message and list of FAQ questions.
+    No authentication required - public endpoint for discovery.
+    """
+    try:
+        questions = mongo_db_manager.get_all_faq_questions()
+        
+        question_list = [
+            {
+                "id": q["question_id"],
+                "text": q["question_text"],
+                "link": f"/faq/{q['question_id']}"
+            }
+            for q in questions
+        ]
+        
+        return jsonify({
+            "message": "Hello, this is your AI assistant for exploring and annotating biological entities. To help get started, just click one to begin:",
+            "questions": question_list
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"Error in FAQ intro: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@main_bp.route("/faq/<question_id>", methods=["GET"])
+def get_faq_answer(question_id):
+    """
+    Get answer for a FAQ question from MongoDB.
+    No authentication required for demo purposes.
+    Returns pre-populated answer instantly.
+    """
+    try:
+        faq = mongo_db_manager.get_faq_by_id(question_id)
+        
+        if not faq:
+            return jsonify({
+                "error": f"Question ID '{question_id}' not found in FAQ",
+                "suggestion": "Use POST /query for custom questions"
+            }), 404
+        
+        return jsonify({
+            "question": faq["question_text"],
+            "answer": faq["answer"]
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"Error in FAQ answer: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @main_bp.route("/", methods=["GET"])
 def health_check():
     return jsonify("This is health check")
