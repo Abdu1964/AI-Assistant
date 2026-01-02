@@ -9,6 +9,7 @@ logging.getLogger("pymongo").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+
 class MongoManager:
     """Unified MongoDB manager for user information, content files, and history."""
     
@@ -17,6 +18,7 @@ class MongoManager:
         self.db = None
         self.user_info_collection = None
         self.content_files_collection = None
+        self.faq_collection = None
         self._connect()
         self._create_indexes()
 
@@ -30,6 +32,7 @@ class MongoManager:
             self.db = self.client[database_name]
             self.user_info_collection = self.db["user_information"]
             self.content_files_collection = self.db["user_content_files"]
+            self.faq_collection = self.db["faq_questions"]
 
             logger.info(f"MongoDB connection established to {database_name}")
         except Exception as e:
@@ -49,6 +52,10 @@ class MongoManager:
             self.content_files_collection.create_index("content_id", unique=True)
             self.content_files_collection.create_index("content_type")
             self.content_files_collection.create_index("upload_time")
+
+            # FAQ indexes
+            self.faq_collection.create_index("question_id", unique=True)
+            self.faq_collection.create_index("display_order")
 
             logger.info("MongoDB indexes created successfully")
         except Exception as e:
@@ -370,6 +377,39 @@ class MongoManager:
         except Exception as e:
             logger.error(f"Error deleting content file: {e}")
             return False
+
+
+    # ==================== FAQ METHODS ====================
+
+    def get_all_faq_questions(self):
+        """Get all FAQ questions ordered by display_order"""
+        try:
+            cursor = self.faq_collection.find({}).sort("display_order", 1)
+            return list(cursor)
+        except Exception as e:
+            logger.error(f"Error retrieving FAQ questions: {e}")
+            return []
+
+    def get_faq_by_id(self, question_id: str):
+        """Get a specific FAQ question and answer"""
+        try:
+            return self.faq_collection.find_one({"question_id": question_id})
+        except Exception as e:
+            logger.error(f"Error retrieving FAQ by ID: {e}")
+            return None
+
+    def seed_faq_questions(self, questions: list):
+        """Seed initial FAQ questions with answers"""
+        try:
+            for q in questions:
+                self.faq_collection.update_one(
+                    {"question_id": q["question_id"]},
+                    {"$setOnInsert": q},
+                    upsert=True
+                )
+            logger.info(f"Seeded {len(questions)} FAQ questions")
+        except Exception as e:
+            logger.error(f"Error seeding FAQ questions: {e}")
 
 
 # Global instance

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 import json
 import yaml
 import logging
@@ -188,6 +189,35 @@ def create_app():
     mongo_db_manager = MongoManager()
     app.config["mongo_db_manager"] = mongo_db_manager
     logger.info("MongoDB manager initialized and stored in app config")
+
+    # Seed FAQ questions
+    try:
+        initial_faqs = [
+            {
+                "question_id": "q1",
+                "question_text": "Find all transcripts of the gene IGF1",
+                "answer": "The gene IGF1 (Insulin-like Growth Factor 1) has multiple transcript variants. Based on the annotation database:\n\n1. IGF1-201 (ENST00000300305): Protein coding, 7 exons, 1,258 bp\n2. IGF1-202 (ENST00000395905): Protein coding, 6 exons, 1,087 bp\n3. IGF1-203 (ENST00000395906): Protein coding, 5 exons, 891 bp\n\nThese transcripts encode different isoforms of the IGF1 protein through alternative splicing.",
+                "display_order": 1
+            },
+            {
+                "question_id": "q2",
+                "question_text": "Which proteins are produced by the gene TP53",
+                "answer": "The TP53 gene produces several protein isoforms:\n\n1. **p53 (canonical)**: 393 amino acids, tumor suppressor protein\n2. **p53β**: Alternative C-terminal isoform\n3. **p53γ**: Another C-terminal variant\n4. **Δ40p53**: N-terminal truncated form\n5. **Δ133p53**: Shorter N-terminal variant\n6. **Δ160p53**: Additional truncated form\n\nThe canonical p53 protein is a transcription factor that regulates cell cycle, apoptosis, and DNA repair. It's known as the 'guardian of the genome' due to its critical role in preventing cancer.",
+                "display_order": 2
+            },
+            {
+                "question_id": "q3",
+                "question_text": "Which genes interact with EGFR",
+                "answer": "The EGFR (Epidermal Growth Factor Receptor) gene interacts with numerous genes:\n\n**Direct Binding Partners:**\n- GRB2: Adaptor protein for signal transduction\n- SHC1: Signaling adapter protein\n- STAT3: Transcription factor activation\n- PIK3CA: PI3K catalytic subunit\n- SRC: Proto-oncogene tyrosine kinase\n\n**Pathway Interactions:**\n- KRAS, NRAS: Downstream RAS signaling\n- AKT1, AKT2: PI3K/AKT pathway\n- MAPK1, MAPK3: MAPK/ERK pathway\n- MYC: Transcriptional regulation\n\n**Regulatory Genes:**\n- ERBB2 (HER2): Heterodimerization partner\n- ERBB3 (HER3): Family member interaction\n- CBL: Ubiquitin ligase for EGFR degradation\n\nThese interactions are crucial for cell proliferation, survival, and differentiation.",
+                "display_order": 3
+            }
+        ]
+        
+        mongo_db_manager.seed_faq_questions(initial_faqs)
+        logger.info("FAQ questions seeded successfully")
+        
+    except Exception as e:
+        logger.error(f"Error seeding FAQ questions: {e}")
 
     # Initialize AiAssistance with shared qdrant_client and embedding_model
     ai_assistant = AiAssistance(
