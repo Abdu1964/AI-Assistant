@@ -28,7 +28,7 @@ class Qdrant:
 
         try:
             qdrant_url = os.environ.get(
-                "QDRANT_CLIENT", "http://host.docker.internal:6333"
+                "QDRANT_CLIENT"
             )
             self.client = QdrantClient(
                 url=qdrant_url,
