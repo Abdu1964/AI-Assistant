@@ -399,15 +399,31 @@ class MongoManager:
             return None
 
     def seed_faq_questions(self, questions: list):
-        """Seed initial FAQ questions with answers"""
+        """
+        Sync FAQ questions from JSON to MongoDB.
+        - Adds new questions
+        - Updates existing questions (if content changed)
+        - Removes questions not present in the input list
+        """
         try:
+            # 1. Get all current question IDs from the input list
+            input_ids = [q["question_id"] for q in questions]
+            
+            # 2. Update or Insert (Upsert) each question from the input
             for q in questions:
-                self.faq_collection.update_one(
+                self.faq_collection.replace_one(
                     {"question_id": q["question_id"]},
-                    {"$setOnInsert": q},
+                    q,
                     upsert=True
                 )
-            logger.info(f"Seeded {len(questions)} FAQ questions")
+            
+            # 3. Delete questions that are in DB but NOT in the input list
+            result = self.faq_collection.delete_many(
+                {"question_id": {"$nin": input_ids}}
+            )
+            
+            logger.info(f"FAQ Sync Complete: Seeded/Updated {len(questions)} questions. Removed {result.deleted_count} old questions.")
+            
         except Exception as e:
             logger.error(f"Error seeding FAQ questions: {e}")
 
