@@ -9,6 +9,7 @@ logging.getLogger("pymongo").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+
 class MongoManager:
     """Unified MongoDB manager for user information, content files, and history."""
     
@@ -17,6 +18,7 @@ class MongoManager:
         self.db = None
         self.user_info_collection = None
         self.content_files_collection = None
+        self.faq_collection = None
         self._connect()
         self._create_indexes()
 
@@ -30,6 +32,7 @@ class MongoManager:
             self.db = self.client[database_name]
             self.user_info_collection = self.db["user_information"]
             self.content_files_collection = self.db["user_content_files"]
+            self.faq_collection = self.db["faq_questions"]
 
             logger.info(f"MongoDB connection established to {database_name}")
         except Exception as e:
@@ -49,6 +52,10 @@ class MongoManager:
             self.content_files_collection.create_index("content_id", unique=True)
             self.content_files_collection.create_index("content_type")
             self.content_files_collection.create_index("upload_time")
+
+            # FAQ indexes
+            self.faq_collection.create_index("question_id", unique=True)
+            self.faq_collection.create_index("display_order")
 
             logger.info("MongoDB indexes created successfully")
         except Exception as e:
@@ -370,6 +377,55 @@ class MongoManager:
         except Exception as e:
             logger.error(f"Error deleting content file: {e}")
             return False
+
+
+    # ==================== FAQ METHODS ====================
+
+    def get_all_faq_questions(self):
+        """Get all FAQ questions ordered by display_order"""
+        try:
+            cursor = self.faq_collection.find({}).sort("display_order", 1)
+            return list(cursor)
+        except Exception as e:
+            logger.error(f"Error retrieving FAQ questions: {e}")
+            return []
+
+    def get_faq_by_id(self, question_id: str):
+        """Get a specific FAQ question and answer"""
+        try:
+            return self.faq_collection.find_one({"question_id": question_id})
+        except Exception as e:
+            logger.error(f"Error retrieving FAQ by ID: {e}")
+            return None
+
+    def seed_faq_questions(self, questions: list):
+        """
+        Sync FAQ questions from JSON to MongoDB.
+        - Adds new questions
+        - Updates existing questions (if content changed)
+        - Removes questions not present in the input list
+        """
+        try:
+            # 1. Get all current question IDs from the input list
+            input_ids = [q["question_id"] for q in questions]
+            
+            # 2. Update or Insert (Upsert) each question from the input
+            for q in questions:
+                self.faq_collection.replace_one(
+                    {"question_id": q["question_id"]},
+                    q,
+                    upsert=True
+                )
+            
+            # 3. Delete questions that are in DB but NOT in the input list
+            result = self.faq_collection.delete_many(
+                {"question_id": {"$nin": input_ids}}
+            )
+            
+            logger.info(f"FAQ Sync Complete: Seeded/Updated {len(questions)} questions. Removed {result.deleted_count} old questions.")
+            
+        except Exception as e:
+            logger.error(f"Error seeding FAQ questions: {e}")
 
 
 # Global instance
