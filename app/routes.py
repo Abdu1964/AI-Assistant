@@ -431,6 +431,7 @@ def clear_user_history(current_user_id, auth_token):
 
 
 @main_bp.route("/faq", methods=["GET"])
+@token_required
 def get_faq_intro():
     """
     Get welcome message and list of FAQ questions.
@@ -460,6 +461,7 @@ def get_faq_intro():
 
 
 @main_bp.route("/faq/<question_id>", methods=["GET"])
+@token_required
 def get_faq_answer(question_id):
     """
     Get answer for a FAQ question from MongoDB.
