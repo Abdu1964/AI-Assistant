@@ -453,7 +453,7 @@ def clear_user_history(current_user_id, auth_token):
 
 @main_bp.route("/faq", methods=["GET"])
 @token_required
-def get_faq_intro():
+def get_faq_intro(current_user_id,auth_token):
     """
     Get welcome message and list of FAQ questions.
     No authentication required - public endpoint for discovery.
@@ -471,7 +471,7 @@ def get_faq_intro():
         ]
         
         return jsonify({
-            "message": (
+            "text": (
                 "Hello! I’m MOZI, your AI assistant for exploring and annotating "
                 "biomedical entities in the BioAtomspace. "
                 "To help you get started, here are some example questions you can try. "
@@ -488,7 +488,7 @@ def get_faq_intro():
 
 @main_bp.route("/faq/<question_id>", methods=["GET"])
 @token_required
-def get_faq_answer(question_id):
+def get_faq_answer(current_user_id,auth_token,question_id):
     """
     Get answer for a FAQ question from MongoDB.
     No authentication required for demo purposes.
@@ -500,12 +500,12 @@ def get_faq_answer(question_id):
         if not faq:
             return jsonify({
                 "error": f"Question ID '{question_id}' not found in FAQ",
-                "suggestion": "Use POST /query for custom questions"
+                "text": "Use POST /query for custom questions"
             }), 404
         
         return jsonify({
             "question": faq["question_text"],
-            "answer": faq["answer"]
+            "text": faq["answer"]
         }), 200
         
     except Exception as e:
