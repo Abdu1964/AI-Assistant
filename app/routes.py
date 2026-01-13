@@ -450,10 +450,15 @@ def get_faq_intro():
         ]
         
         return jsonify({
-            "message": "Hello, this is your AI assistant for exploring and annotating biological entities. To help get started, just click one to begin:",
+            "message": (
+                "Hello! I’m MOZI, your AI assistant for exploring and annotating "
+                "biomedical entities in the BioAtomspace. "
+                "To help you get started, here are some example questions you can try. "
+                "Just click one to begin:"
+            ),
             "questions": question_list
         }), 200
-        
+
     except Exception as e:
         current_app.logger.error(f"Error in FAQ intro: {e}")
         traceback.print_exc()
