@@ -103,9 +103,30 @@ def process_query(current_user_id, auth_token):
             if newly_uploaded_content_ids:
                 content_ids = content_ids + newly_uploaded_content_ids if content_ids else newly_uploaded_content_ids
 
-        # Ensure query exists before processing
-        if not question and not json_query:
-            return jsonify({"error": "No query provided."}), 400
+        # Case 1: files uploaded, but no question -> upload-only flow
+        if uploaded_files and not question and not json_query:
+            suggested_questions = []
+
+            for r in upload_results:
+                sq = r.get("response", {}).get("resource", {}).get("suggested_questions")
+                if sq:
+                    if isinstance(sq, list):
+                        suggested_questions.extend(sq)
+                    else:
+                        suggested_questions.append(sq)
+
+            return jsonify({
+                "text": "Files uploaded successfully.",
+                "content_ids": content_ids,
+                "suggested_questions": suggested_questions,
+            }), 200
+
+        # Case 2: no files and no query -> invalid request
+        if not uploaded_files and not question and not json_query:
+            return jsonify({
+                "error": "No input provided. Please upload files or submit a question."
+            }), 400
+
         # Pass all relevant arguments to ai_assistant
         response = ai_assistant.assistant_response(
             query=question,
@@ -427,6 +448,71 @@ def clear_user_history(current_user_id, auth_token):
     except Exception as e:
         current_app.logger.error(f"Error clearing history: {e}")
         return jsonify(error=f"Error clearing history: {str(e)}"), 500
+
+
+
+@main_bp.route("/faq", methods=["GET"])
+@token_required
+def get_faq_intro(current_user_id,auth_token):
+    """
+    Get welcome message and list of FAQ questions.
+    No authentication required - public endpoint for discovery.
+    """
+    try:
+        questions = mongo_db_manager.get_all_faq_questions()
+        
+        question_list = [
+            {
+                "id": q["question_id"],
+                "text": q["question_text"],
+                "link": f"/faq/{q['question_id']}"
+            }
+            for q in questions
+        ]
+        
+        return jsonify({
+            "text": (
+                "Hello! I’m MOZI, your AI assistant for exploring and annotating "
+                "biomedical entities in the BioAtomspace. "
+                "To help you get started, here are some example questions you can try. "
+                "Just click one to begin:"
+            ),
+            "questions": question_list
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error in FAQ intro: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@main_bp.route("/faq/<question_id>", methods=["GET"])
+@token_required
+def get_faq_answer(current_user_id,auth_token,question_id):
+    """
+    Get answer for a FAQ question from MongoDB.
+    No authentication required for demo purposes.
+    Returns pre-populated answer instantly.
+    """
+    try:
+        faq = mongo_db_manager.get_faq_by_id(question_id)
+        
+        if not faq:
+            return jsonify({
+                "error": f"Question ID '{question_id}' not found in FAQ",
+                "text": "Use POST /query for custom questions"
+            }), 404
+        
+        return jsonify({
+            "question": faq["question_text"],
+            "text": faq["text"],
+            "json_format": faq["json_format"]
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"Error in FAQ answer: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 @main_bp.route("/", methods=["GET"])

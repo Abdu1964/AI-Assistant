@@ -13,3 +13,6 @@ rag_user_pdf.json
 pdfs_uploaded
 *.env
 .infisical.json
+/tmp
+/storage
+

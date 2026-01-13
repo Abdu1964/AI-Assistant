@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 import json
 import yaml
 import logging
@@ -188,6 +189,20 @@ def create_app():
     mongo_db_manager = MongoManager()
     app.config["mongo_db_manager"] = mongo_db_manager
     logger.info("MongoDB manager initialized and stored in app config")
+
+    # Seed FAQ questions
+    try:
+        faq_file_path = "faq_sample_data.json"
+        if os.path.exists(faq_file_path):
+            with open(faq_file_path, "r", encoding="utf-8") as f:
+                initial_faqs = json.load(f)
+            
+            mongo_db_manager.seed_faq_questions(initial_faqs)
+        else:
+            logger.warning(f"FAQ sample data file not found at {faq_file_path}")
+            
+    except Exception as e:
+        logger.error(f"Error seeding FAQ questions: {e}")
 
     # Initialize AiAssistance with shared qdrant_client and embedding_model
     ai_assistant = AiAssistance(
