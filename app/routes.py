@@ -505,7 +505,8 @@ def get_faq_answer(current_user_id,auth_token,question_id):
         
         return jsonify({
             "question": faq["question_text"],
-            "text": faq["answer"]
+            "text": faq["text"],
+            "json_format": faq["json_format"]
         }), 200
         
     except Exception as e:
