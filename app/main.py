@@ -75,8 +75,6 @@ class AgentState(TypedDict):
     # Parallel execution control
     agents_to_run: List[str]
     agents_completed: Annotated[List[str], operator.add]
-    # Clarifying questions
-    suggested_questions: Optional[List[str]]
 
 
 class AiAssistance:
@@ -126,7 +124,6 @@ class AiAssistance:
         workflow.add_node("content_retrieval_agent", self._content_retrieval_agent)
         workflow.add_node("biogpt_agent", self._biogpt_agent)
         workflow.add_node("aggregator", self._aggregate_responses)
-        workflow.add_node("clarifying_questions", self._generate_clarifying_questions)
         workflow.add_node("finalizer", self._finalize_response)
 
         # Define edges
@@ -155,10 +152,8 @@ class AiAssistance:
         workflow.add_edge("galaxy_agent", "router")
         workflow.add_edge("content_retrieval_agent", "router")
         workflow.add_edge("biogpt_agent", "router")
-        
-        # Aggregator flows to clarifying questions, then to finalizer
-        workflow.add_edge("aggregator", "clarifying_questions")
-        workflow.add_edge("clarifying_questions", "finalizer")
+        # Aggregator flows to finalizer
+        workflow.add_edge("aggregator", "finalizer")
         workflow.add_edge("finalizer", END)
         return workflow
 
@@ -770,69 +765,19 @@ class AiAssistance:
                 }
             }
 
-    def _generate_clarifying_questions(self, state: AgentState) -> Dict[str, Any]:
-        """
-        Generate clarifying/follow-up questions based on the aggregated response.
-        This runs after all agents have completed and their responses have been aggregated.
-        """
-        logger.info("Generating clarifying questions based on aggregated response")
-        
-        try:
-            response = state.get("response", {})
-            response_text = response.get("text", "")
-            user_query = state.get("user_query", "")
-            
-            if not response_text or len(response_text.strip()) < 20:
-                logger.info("Response too short, skipping question generation")
-                return {"suggested_questions": []}
-            
-            from app.prompts.rag_prompts import CLARIFYING_QUESTIONS_PROMPT
-            
-            prompt = CLARIFYING_QUESTIONS_PROMPT.format(
-                user_query=user_query,
-                assistant_response=response_text
-            )
-            
-            result = self.basic_llm.generate(prompt)
-            
-            questions = []
-            if result:
-                lines = result.strip().split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if line and (line[0].isdigit() or line.startswith('-') or line.startswith('•')):
-                        if '.' in line and line[0].isdigit():
-                            question = line.split('.', 1)[-1].strip()
-                        else:
-                            question = line.strip('- •').strip()
-                        
-                        if question and len(question) > 5: 
-                            questions.append(question)
-            
-            logger.info(f"Generated {len(questions)} clarifying questions")
-            return {"suggested_questions": questions[:5]}  # Limit to 5 questions
-            
-        except Exception as e:
-            logger.error(f"Error generating clarifying questions: {e}", exc_info=True)
-            return {"suggested_questions": []}
-
-
     def _finalize_response(self, state: AgentState) -> Dict[str, Any]:
         """Finalize and return the response"""
         response = state.get("response", {})
-        suggested_questions = state.get("suggested_questions", [])
         user_id = state.get("user_id")
         
         logger.info(f"Finalizing response for user: {user_id}")
         
+        # Ensure response has correct structure
         if not isinstance(response, dict):
             response = {"text": str(response), "json_format": None}
         response.setdefault("text", "")
 
-        if suggested_questions:
-            response["suggested_questions"] = suggested_questions
-            logger.info(f"Added {len(suggested_questions)} suggested questions to response")
-
+        # Emit final response
         emit_to_user(user=user_id, message=response, status="completed")
         
         return {"response": response}
@@ -852,6 +797,7 @@ class AiAssistance:
             f"Agent called with message: {message}, user_id: {user_id}, "
             f"content_ids: {content_ids}, graph_id: {graph_id}, urls: {urls}"
         )
+        # return  {"text" :self.biogpt.generate_answer(message)}
            
         try:
             # Create initial state
@@ -875,7 +821,6 @@ class AiAssistance:
                 "content_retrieval_response": None,
                 "agents_to_run": [],
                 "agents_completed": [],
-                "suggested_questions": None,  # Initialize suggested questions
             }
 
             # Run the workflow
