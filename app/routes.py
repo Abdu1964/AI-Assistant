@@ -103,9 +103,30 @@ def process_query(current_user_id, auth_token):
             if newly_uploaded_content_ids:
                 content_ids = content_ids + newly_uploaded_content_ids if content_ids else newly_uploaded_content_ids
 
-        # Ensure query exists before processing
-        if not question and not json_query:
-            return jsonify({"error": "No query provided."}), 400
+        # Case 1: files uploaded, but no question -> upload-only flow
+        if uploaded_files and not question and not json_query:
+            suggested_questions = []
+
+            for r in upload_results:
+                sq = r.get("response", {}).get("resource", {}).get("suggested_questions")
+                if sq:
+                    if isinstance(sq, list):
+                        suggested_questions.extend(sq)
+                    else:
+                        suggested_questions.append(sq)
+
+            return jsonify({
+                "text": "Files uploaded successfully.",
+                "content_ids": content_ids,
+                "suggested_questions": suggested_questions,
+            }), 200
+
+        # Case 2: no files and no query -> invalid request
+        if not uploaded_files and not question and not json_query:
+            return jsonify({
+                "error": "No input provided. Please upload files or submit a question."
+            }), 400
+
         # Pass all relevant arguments to ai_assistant
         response = ai_assistant.assistant_response(
             query=question,
