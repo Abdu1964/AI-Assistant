@@ -9,7 +9,7 @@ Before you begin, ensure you have the following installed:
 * **Python 3.8+**
 * **Docker** (for running the application)
 
-# Dependency management when installing locally
+## Dependency management when installing locally
 * **Poetry** 
 
 ## Installation and Setup
