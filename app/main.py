@@ -64,7 +64,7 @@ class AgentState(TypedDict):
     content_ids: Optional[List[str]]
     graph_id: Optional[str]
     urls: Optional[List[str]]
-    resource: Optional[str]
+    resource: Optional[Any]
     pipeline_details: Dict[str, Any]
     # Agent-specific responses with source attribution
     annotation_response: Optional[Dict[str, Any]]
@@ -72,6 +72,7 @@ class AgentState(TypedDict):
     galaxy_response: Optional[Dict[str, Any]]
     content_retrieval_response: Optional[Dict[str, Any]]
     biogpt_response:Optional[Dict[str, Any]]
+    hypothesis_response: Optional[Dict[str, Any]]
     # Parallel execution control
     agents_to_run: List[str]
     agents_completed: Annotated[List[str], operator.add]
@@ -117,7 +118,7 @@ class AiAssistance:
         # Add nodes
         workflow.add_node("classifier", self._classify_query)
         workflow.add_node("router", self._router)
-        workflow.add_node("_hypothesis_agent", self._hypothesis_agent)
+        workflow.add_node("hypothesis_agent", self._hypothesis_agent)
         workflow.add_node("annotation_agent", self._annotation_agent)
         workflow.add_node("rag_agent", self._rag_agent)
         workflow.add_node("galaxy_agent", self._galaxy_agent)
@@ -136,7 +137,7 @@ class AiAssistance:
             self._should_run_agent,
             {
                 "annotation_agent": "annotation_agent",
-                "hypothesis_agent": "_hypothesis_agent",
+                "hypothesis_agent": "hypothesis_agent",
                 "rag_agent": "rag_agent",
                 "galaxy_agent": "galaxy_agent",
                 "content_retrieval_agent": "content_retrieval_agent",
@@ -152,6 +153,7 @@ class AiAssistance:
         workflow.add_edge("galaxy_agent", "router")
         workflow.add_edge("content_retrieval_agent", "router")
         workflow.add_edge("biogpt_agent", "router")
+        workflow.add_edge("hypothesis_agent", "router")
         # Aggregator flows to finalizer
         workflow.add_edge("aggregator", "finalizer")
         workflow.add_edge("finalizer", END)
@@ -254,7 +256,7 @@ class AiAssistance:
         # Map query types to agent routes
         type_to_agent = {
             "annotation_biological": "annotation_agent",
-            "hypothesis_generation": "_hypothesis_agent",
+            "hypothesis_generation": "hypothesis_agent",
             "annotation_general": "annotation_agent",
             "galaxy": "galaxy_agent",
             "rag": "rag_agent",
@@ -345,6 +347,7 @@ class AiAssistance:
                     "agents_completed": ["annotation_agent"],
                     "messages": [AIMessage(content="Annotation processing completed")]
                 }
+
             else:
                 error_msg = pipeline_response.get("error", "Unknown error")
                 logger.error(f"Annotation pipeline failed: {error_msg}")
@@ -369,34 +372,36 @@ class AiAssistance:
                 "agents_completed": ["annotation_agent"],
                 "error": str(e),
             }
+
     def _hypothesis_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle hypothesis generation queries"""
         logger.info(
             f"Hypothesis agent processing query: {state['user_query']} for user: {state['user_id']}"
         )
         try:
-    #         emit_to_user(user=state["user_query"], message="Generating hypothesis...")
-    #         response = self.hypothesis_generation.generate_hypothesis(
-    #             token=state["token"],
-    #             user_query=state["user_query"],
-    #             user_id=state["user_id"],
-    #         )
+            emit_to_user(user=state["user_id"], message="Generating hypothesis...")
+            response = self.hypothesis_generation.generate_hypothesis(
+                token=state["token"],
+                user_query=state["user_query"],
+                user_id=state["user_id"],
+            )
 
-        #     return {
-        #         "response": response,
-        #         "messages": [AIMessage(content=f"Hypothesis generated: {response}")],
-        #     }
-            return {"text": "Hypothesis generation agent is under development.",}
+            return {
+                "hypothesis_response": response,  
+                "messages": [AIMessage(content=f"Hypothesis generated: {response.get('text')}")],
+                "agents_completed": ["hypothesis_agent"],
+            }
+       
         except Exception as e:
             logger.error("Error in hypothesis agent", exc_info=True)
             return {
-                "response": f"Error generating hypothesis: {str(e)}",
+                "hypothesis_response": {"text": f"Error generating hypothesis: {str(e)}", "resource": None},
                 "error": str(e),
                 "messages": [
                     AIMessage(content=f"Error in hypothesis generation: {str(e)}")
                 ],
+                "agents_completed": ["hypothesis_agent"],
             }
-
 
     def _rag_agent(self, state: AgentState) -> Dict[str, Any]:
         """Handle general information queries"""
@@ -665,7 +670,7 @@ class AiAssistance:
                     "source": galaxy_resp.get("source", "Galaxy platform"),
                     "content": text_content
                 })
-
+        #-----------------Biogpt----------------------
         biogpt_resp = state.get("biogpt_response")
         if biogpt_resp:
             text_content = biogpt_resp.get("text", "")
@@ -675,6 +680,23 @@ class AiAssistance:
                     "source": biogpt_resp.get("source", "biogpt"),
                     "content": text_content
                 })
+       
+
+        # ---------------- Hypothesis Agent ----------------
+        hyp_resp = state.get("hypothesis_response")
+        resource_to_save = state.get("resource") 
+        if hyp_resp:
+            text_content = hyp_resp.get("text", "")
+            if text_content:
+                agent_outputs.append({
+                    "agent": "hypothesis_agent",
+                    "source": "hypothesis generator",
+                    "content": text_content
+                })
+            
+            # Capture the resource (graph data)
+            if hyp_resp.get("resource"):
+                resource_to_save = hyp_resp.get("resource")      
 
         # ---------------- Content Retrieval Agent ----------------
         content_resp = state.get("content_retrieval_response")
@@ -741,7 +763,8 @@ class AiAssistance:
                 "response": {
                     "text": aggregated_text,
                     "json_format": json_format
-                }
+                },
+                "resource": resource_to_save
             }
 
         except Exception as e:
@@ -762,7 +785,8 @@ class AiAssistance:
                 "response": {
                     "text": fallback_text,
                     "json_format": json_format
-                }
+                },
+                "resource": resource_to_save
             }
 
     def _finalize_response(self, state: AgentState) -> Dict[str, Any]:
@@ -776,6 +800,9 @@ class AiAssistance:
         if not isinstance(response, dict):
             response = {"text": str(response), "json_format": None}
         response.setdefault("text", "")
+         # Include the resource (hypothesis graph) if available
+        if state.get("resource"):
+            response["resource"] = state.get("resource")
 
         # Emit final response
         emit_to_user(user=user_id, message=response, status="completed")
@@ -790,7 +817,7 @@ class AiAssistance:
         content_ids: Optional[List[str]] = None,
         graph_id: Optional[str] = None,
         urls: Optional[List[str]] = None,
-        resource: Optional[str] = None,
+        resource: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Main entry point for processing queries with parallel agent execution"""
         logger.info(
@@ -861,7 +888,7 @@ class AiAssistance:
         graph_id: Optional[str] = None,
         urls: Optional[List[str]] = None,
         content_ids: Optional[List[str]] = None,
-        resource: Optional[str] = None,
+        resource: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Main entry point for assistant responses.
@@ -942,10 +969,12 @@ class AiAssistance:
                     elif not isinstance(agent_response, dict):
                         agent_response = {"text": str(agent_response), "agents_completed": []}
 
-                    # Log resource type if available
-                    resource_type = agent_response.get("resource", {}).get("type")
-                    if resource_type:
-                        logger.info(f"Resource successfully created: {resource_type}")
+                    # Log resource type if available safely
+                    resource_data = agent_response.get("resource")
+                    if isinstance(resource_data, dict):
+                        resource_type = resource_data.get("type")
+                        if resource_type:
+                            logger.info(f"Resource successfully created: {resource_type}")
 
                     # Extract answer
                     assistant_answer = agent_response.get("text", str(agent_response))
