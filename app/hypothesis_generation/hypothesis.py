@@ -15,6 +15,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from typing import Dict, Any, Tuple, Optional, List, Union
+from app.prompts.hypothesis_prompt import hypothesis_format_prompt, hypothesis_response
+from app.storage.redis import redis_manager
+from app.socket_manager import emit_to_user
+import logging
+import os
+import difflib
+import requests
+import time
+
+# Configure logging with more detailed format
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Load API endpoints from environment variables
 HYPOTHESIS_CHAT_ENDPOINT = os.getenv('HYPOTHESIS_CHAT_ENDPOINT')
 HYPOTHESIS_MAIN_ENDPOINT = os.getenv('HYPOTHESIS_MAIN_ENDPOINT')
@@ -96,12 +113,16 @@ class HypothesisGeneration:
         return response
 
     def _step_2_poll(self, token: str, hypothesis_id: str) -> Dict[str, Any]:
-        """Step 2: Polling Loop"""
+        """Step 2: Polling Loop with Retry Mechanism"""
         logger.info(f"Step 2: Polling status for hypothesis ID: {hypothesis_id}")
-        max_retries = 15 # 30 seconds max
+        
+        # Retry configuration: 6 attempts * 10 seconds = 60 seconds max wait
+        max_retries = 6
+        retry_delay = 10 
+        
         url = f"{HYPOTHESIS_DATA_API}/hypothesis"
         
-        for _ in range(max_retries):
+        for attempt in range(max_retries):
             response = self._make_api_request("GET", url, token, params={"id": hypothesis_id})
             
             valid, error = self._validate_response(response, required_keys=["status"])
@@ -109,13 +130,19 @@ class HypothesisGeneration:
                  return {"error": f"Status check failed: {error}"}
             
             status = response.get("status")
+            logger.info(f"Polling attempt {attempt + 1}/{max_retries}: Status is '{status}'")
+
             if status == "completed":
                 if "enrich_id" not in response:
                      return {"error": "Completed status but missing enrich_id"}
                 return response
             elif status == "pending":
-                time.sleep(2)
-                continue
+                if attempt < max_retries - 1:
+                    logger.info(f"Status is pending. Waiting {retry_delay} seconds before retrying...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    return {"error": "Enrichment timed out after maximum retries"}
             else:
                 return {"error": f"Unknown status: {status}"}
                 
