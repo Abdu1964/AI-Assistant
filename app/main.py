@@ -625,23 +625,15 @@ class AiAssistance:
         # ---------------- Annotation Agent ----------------
         annotation_resp = state.get("annotation_response")
         if annotation_resp:
+            # Use text or summary if available
             text_content = annotation_resp.get("text") or annotation_resp.get("summary") or ""
+            json_format = annotation_resp.get("json_format")
+
             if text_content:
                 agent_outputs.append({
                     "agent": "annotation_agent",
                     "source": annotation_resp.get("source", "annotation database"),
                     "content": text_content
-                })
-
-            # Capture JSON structured data
-            json_format = annotation_resp.get("json_format")
-
-            # Add placeholder if only JSON exists
-            if json_format and not text_content:
-                agent_outputs.append({
-                    "agent": "annotation_agent",
-                    "source": annotation_resp.get("source", "annotation database"),
-                    "content": "Annotation visualization structure format is created successfully (see structured data)."
                 })
 
         # ---------------- RAG Agent ----------------
@@ -696,11 +688,11 @@ class AiAssistance:
                     "content": content_parts
                 })
 
-        # ---------------- Handle Empty Outputs ----------------
-        if not agent_outputs and json_format:
+        # ---------------- Handle JSON-only case ----------------
+        if json_format and not agent_outputs:
             return {
                 "response": {
-                    "text": "I found the requested annotation data in the database.",
+                    "text": "Annotation visualization structure format is created successfully (see structured data).",
                     "json_format": json_format
                 }
             }
