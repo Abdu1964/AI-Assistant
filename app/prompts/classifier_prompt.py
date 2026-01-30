@@ -178,5 +178,3 @@ Respond with ONLY a comma-separated list of agent types (no explanation, no extr
 Examples of valid responses: "rag, biogpt" or "annotation_biological" or "galaxy, rag" or "hypothesis"
 
 Classification:"""
-
-
