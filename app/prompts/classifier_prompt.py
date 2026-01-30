@@ -121,6 +121,12 @@ You are a query classifier for a multi-agent system. Analyze the user's query an
    - Biological processes, mechanisms, pathways (general knowledge, not database-specific)
    - Examples: "What are symptoms of vitamin D deficiency?", "How does insulin work?", "What is CRISPR?"
 
+6. **hypothesis**: Genetic hypothesis generation queries
+   - Requests to generate hypotheses about genetic variants and their effects
+   - Questions about variant-phenotype-tissue relationships
+   - Queries mentioning specific genetic variants (rs numbers) and tissues
+   - Examples: "Generate a hypothesis for variant rs1421085 in adipose tissue", "What hypothesis can you create for rs9939609 in liver tissue?", "Create a hypothesis about rs7903146 and diabetes"
+
 ## Classification Rules:
 
 - **Medical/health questions**: Use BOTH "rag, biogpt" for comprehensive answers
@@ -128,6 +134,7 @@ You are a query classifier for a multi-agent system. Analyze the user's query an
 - **Questions about uploaded documents**: Always include "rag"
 - **Galaxy platform questions**: Use "galaxy" (add "rag" for additional context)
 - **General biological knowledge**: Use "biogpt" (add "rag" if broader context helps)
+- **Genetic hypothesis generation**: Use "hypothesis" for queries about generating hypotheses for genetic variants and tissues
 
 ## Input:
 
@@ -159,10 +166,15 @@ Response: biogpt
 Query: "Find transcripts for TP53"
 Response: annotation_biological
 
+Query: "Generate a hypothesis for variant rs1421085 in adipose subcutaneous tissue"
+Response: hypothesis
+
+Query: "Create a hypothesis about rs9939609 and obesity in liver tissue"
+Response: hypothesis
+
 ## Your Response:
 
 Respond with ONLY a comma-separated list of agent types (no explanation, no extra text).
-Examples of valid responses: "rag, biogpt" or "annotation_biological" or "galaxy, rag"
+Examples of valid responses: "rag, biogpt" or "annotation_biological" or "galaxy, rag" or "hypothesis"
 
 Classification:"""
-
