@@ -33,8 +33,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Load API endpoints from environment variables
-# Load API endpoints from environment variables
-HYPOTHESIS_API_URL = os.getenv('HYPOTHESIS_API_URL')
+HYPOTHESIS_CHAT_ENDPOINT = os.getenv('HYPOTHESIS_CHAT_ENDPOINT')
+HYPOTHESIS_MAIN_ENDPOINT = os.getenv('HYPOTHESIS_MAIN_ENDPOINT')
+HYPOTHESIS_DATA_API = os.getenv('HYPOTHESIS_DATA_API')
 
 
 class HypothesisGeneration:
@@ -102,7 +103,7 @@ class HypothesisGeneration:
         """Step 1: Start Enrichment"""
         logger.info(f"Step 1: Starting enrichment with params: {params}")
         logger.info(f"Step 1: Starting enrichment with params: {params}")
-        url = f"{HYPOTHESIS_API_URL}/enrich"
+        url = f"{HYPOTHESIS_DATA_API}/enrich"
         response = self._make_api_request("POST", url, token, data=params)
         
         valid, error = self._validate_response(response, required_keys=["hypothesis_id"])
@@ -122,7 +123,7 @@ class HypothesisGeneration:
         max_retries = 6
         retry_delay = 10 
         
-        url = f"{HYPOTHESIS_API_URL}/hypothesis"
+        url = f"{HYPOTHESIS_MAIN_ENDPOINT}/hypothesis"
         
         for attempt in range(max_retries):
         
@@ -156,7 +157,7 @@ class HypothesisGeneration:
         """Step 3: Get Enrichment Results"""
         logger.info(f"Step 3: Fetching results for enrich ID: {enrich_id}")
         logger.info(f"Step 3: Fetching results for enrich ID: {enrich_id}")
-        url = f"{HYPOTHESIS_API_URL}/enrich"
+        url = f"{HYPOTHESIS_DATA_API}/enrich"
         response = self._make_api_request("GET", url, token, params={"id": enrich_id})
         response = self._make_api_request("GET", url, token, params={"id": enrich_id})
         
@@ -169,9 +170,7 @@ class HypothesisGeneration:
     def _step_4_generate(self, token: str, enrich_id: str, go_term_id: str) -> Dict[str, Any]:
         """Step 4: Generate Final Hypothesis"""
         logger.info(f"Step 4: Generating hypothesis for enrich ID: {enrich_id} and GO: {go_term_id}")
-        logger.info(f"Step 4: Generating hypothesis for enrich ID: {enrich_id} and GO: {go_term_id}")
-        url = f"{HYPOTHESIS_API_URL}/hypothesis"
-        response = self._make_api_request("POST", url, token, data={"id": enrich_id, "go": go_term_id})
+        url = f"{HYPOTHESIS_MAIN_ENDPOINT}/hypothesis"
         response = self._make_api_request("POST", url, token, data={"id": enrich_id, "go": go_term_id})
         
         valid, error = self._validate_response(response, required_keys=["summary", "graph"])
@@ -197,7 +196,7 @@ class HypothesisGeneration:
                     "Authorization": f"Bearer {token}"
                 }
                 # Use json=data
-                response = requests.post(HYPOTHESIS_API_URL, json=data, headers=headers)
+                response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
                 response.raise_for_status()
                 data = response.json()
                 emit_to_user(user=user_id,message="Successfully processed query with hypothesis")
@@ -217,7 +216,58 @@ class HypothesisGeneration:
                 }
                 try:
                     # Use json=data
-                    response = requests.post(HYPOTHESIS_API_URL, json=data, headers=headers)
+                    response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                    redis_manager.create_graph(graph_id=data['hypothesis_id'], graph_summary=data['summary'])
+                    logger.info(f"Cached generated graph for graph id {data['resource']['id']}")
+                    return data
+                except Exception as e:
+                    logger.error(f"Failed to retrieve hypothesis by ID: {response}")
+                    emit_to_user(user=user_id,message=f"Failed to retrieve hypothesis")
+                    return "NO summaries provided"
+        except Exception as e:
+            emit_to_user(user=user_id,message="Error retrieving hypothesis")
+            return None
+
+    def get_by_hypothesis_id(self, token: str, hypothesis_id: str, user_id, query=None) -> Dict[str, Any]:
+        """
+        Retrieve hypothesis information by ID.
+        """
+        logger.info(f"Retrieving hypothesis by ID: {hypothesis_id}")
+        emit_to_user(user=user_id,message=f"Retrieving hypothesis by ID: {hypothesis_id}")
+        
+        try:   
+            if query: 
+                emit_to_user(user=user_id,message=f"Processing query with existing hypothesis...")
+                data = {
+                    "query": query,
+                    "hypothesis_id": hypothesis_id}
+                headers = {
+                    "Authorization": f"Bearer {token}"
+                }
+                # Use json=data
+                response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                emit_to_user(user=user_id,message="Successfully processed query with hypothesis")
+                return data
+            else:
+                cached_graph = redis_manager.get_graph_by_id(hypothesis_id)
+                if cached_graph and cached_graph.get("graph_summary"):
+                    logger.info(f"Cache hit for graph_id={hypothesis_id} {cached_graph}")
+                    return {"text": cached_graph["graph_summary"]}
+
+                data = {
+                    "hypothesis_id": hypothesis_id
+                }
+
+                headers = {
+                    "Authorization": f"Bearer {token}"
+                }
+                try:
+                    # Use json=data
+                    response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
                     response.raise_for_status()
                     data = response.json()
                     redis_manager.create_graph(graph_id=data['hypothesis_id'], graph_summary=data['summary'])
@@ -276,7 +326,7 @@ class HypothesisGeneration:
         """
         Fetch the list of projects available to the user.
         """
-        url = f"{HYPOTHESIS_API_URL}/projects"
+        url = f"{HYPOTHESIS_DATA_API}/projects"
         try:
             response = self._make_api_request("GET", url, token)
             valid, error = self._validate_response(response, required_keys=["projects"])
@@ -319,7 +369,7 @@ class HypothesisGeneration:
             project_name = project.get("name")
             
             # Fetch project details
-            url = f"{HYPOTHESIS_API_URL}/projects"
+            url = f"{HYPOTHESIS_DATA_API}/projects"
             details = self._make_api_request("GET", url, token, params={"id": project_id})
             
             if "error" in details:
@@ -380,7 +430,7 @@ class HypothesisGeneration:
             for project in projects:
                 project_id = project.get("id")
                 project_name = project.get("name")
-                url = f"{HYPOTHESIS_API_URL}/projects"
+                url = f"{HYPOTHESIS_DATA_API}/projects"
                 details = self._make_api_request("GET", url, token, params={"id": project_id})
                 if "error" not in details:
                     for h in details.get("hypotheses", []):
