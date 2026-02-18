@@ -7,10 +7,10 @@ The user query is: {question}
 
 ## EXTRACTION TASK
 Extract the following from the query:
-1. Genetic variant identifier(s) - typically in rs#### format (e.g., rs1421085, rs9939609)
+1. Genetic variant identifier(s) - typically in rs#### format (e.g., rs9939609, rs7903146)
 2. Tissue type mentioned (e.g., adipose tissue, liver tissue, adipose subcutaneous tissue, muscle tissue)
 3. Gene(s) mentioned (e.g., FTO, PPARG)
-4. Causal gene(s) explicitly described as causal or associated with variants (e.g., FTO as causal gene for rs1421085)
+4. Causal gene(s) explicitly described as causal or associated with variants (e.g., FTO as causal gene for rs9939609)
 5. GO terms (Gene Ontology terms) mentioned (e.g., "Regulation of Adipose Tissue Development")
 
 ## RULES FOR EXTRACTION
@@ -21,10 +21,13 @@ Extract the following from the query:
 - Extract ALL GO terms mentioned in the query
 - If any category is not found, do NOT include that key in the output
 - Preserve the exact tissue name as mentioned (e.g., "adipose subcutaneous tissue" not just "adipose")
-- Include only the base rs number without additional text (e.g., "rs1421085" not "the rs1421085 SNP")
+- Include only the base rs number without additional text (e.g., "rs9939609" not "the rs9939609 SNP")
 - Extract gene symbols as provided, using standard nomenclature
 - Extract GO terms as complete phrases
 - If no valid information is found, return an empty dictionary: {{}}
+- CRITICAL: NEVER modify or "correct" variant IDs - extract them EXACTLY as written
+- CRITICAL: If the variant looks unfamiliar (e.g., rs9999999), extract it anyway. Do NOT default to rs1421085 or any other "familiar" variant.
+- The user's variant is ALWAYS correct, even if it doesn't exist in your training data
 
 ## OUTPUT FORMAT
 Return ONLY a dictionary with the following format, including only keys that have values:
@@ -55,18 +58,26 @@ Input: "What is the association between rs1421085 and obesity risk?"
 Output: {{"variant": "rs1421085", "tissue_name": "adipose tissue"}}
 
 Example 2:
-Input: "Generate a hypothesis for variant rs1421085 in adipose subcutaneous tissue."
-Output: {{"variant": "rs1421085", "tissue_name": "adipose subcutaneous tissue"}}
+Input: "Generate a hypothesis for variant rs9939609 in adipose subcutaneous tissue."
+Output: {{"variant": "rs9939609", "tissue_name": "adipose subcutaneous tissue"}}
 
 Example 3:
-Input: "What is the role of the gene FTO in adipose tissue in relation to rs1421085?"
-Output: {{"variant": "rs1421085", "tissue_name": "adipose tissue", "gene": "FTO"}}
+Input: "What is the role of the gene TCF7L2 in pancreas tissue in relation to rs7903146?"
+Output: {{"variant": "rs7903146", "tissue_name": "pancreas tissue", "gene": "TCF7L2"}}
 
 Example 4:
-Input: "How do the genes PPARG and PARP1 contribute to liver tissue related to rs1421085?"
-Output: {{"variant": "rs1421085", "tissue_name": "liver tissue", "gene": ["PPARG", "PARP1"]}}
+Input: "How do the genes PPARG and PARP1 contribute to liver tissue related to rs1801282?"
+Output: {{"variant": "rs1801282", "tissue_name": "liver tissue", "gene": ["PPARG", "PARP1"]}}
 
 Example 5:
+Input: "Analyze rs662799 in brain cortex tissue"
+Output: {{"variant": "rs662799", "tissue_name": "brain cortex tissue"}}
+
+Example 6:
+Input: "What's the connection between rs17300539 and muscle tissue development?"
+Output: {{"variant": "rs17300539", "tissue_name": "muscle tissue"}}
+
+Example 7:
 Input: "Tell me about genetics"
 Output: {{}}
 """

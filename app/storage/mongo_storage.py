@@ -437,6 +437,10 @@ class MongoManager:
 
     # ==================== HYPOTHESIS METHODS ====================
 
+    # Note: The methods below are currently "Dead Code" and not used by the AI Assistant.
+    # They were designed for local job tracking in MongoDB, but the current implementation 
+    # uses a direct API flow with the hypothesis server.
+
     def create_hypothesis_request(self, data: dict):
         """Create a new hypothesis request"""
         try:
