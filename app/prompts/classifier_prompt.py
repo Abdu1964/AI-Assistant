@@ -12,7 +12,12 @@ Write a **single, fluent, and conversational summary**:
 - Highlight conflicts if any.
 - Keep it helpful, informative, and readable.
 - Acknowledge structured annotation data if available.
-- if nothing is provide Do not make up information always respond with the responses from the.
+
+CRITICAL RULES:
+- NEVER modify, correct, or substitute genetic variant IDs (rs####). Use them EXACTLY as they appear in the agent outputs. 
+- If an agent reports it could not perform its task (e.g., "No hypothesis is generated"), state this limitation first, then summarize the successes of and information from other agents.
+- Example: "No hypothesis is generated because variant rs9999999 was not found in any project. However, the FTO gene is known to..."
+- If nothing is provided, do not make up information. Always respond based on the responses from the agents.
 """
 
 answer_from_graph = """

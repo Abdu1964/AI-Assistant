@@ -102,7 +102,7 @@ class HypothesisGeneration:
     def _step_1_enrich(self, token: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Step 1: Start Enrichment"""
         logger.info(f"Step 1: Starting enrichment with params: {params}")
-        # Assuming HYPOTHESIS_DATA_API points to /api/mock/hypothesis
+        logger.info(f"Step 1: Starting enrichment with params: {params}")
         url = f"{HYPOTHESIS_DATA_API}/enrich"
         response = self._make_api_request("POST", url, token, data=params)
         
@@ -120,9 +120,14 @@ class HypothesisGeneration:
         max_retries = 6
         retry_delay = 10 
         
-        url = f"{HYPOTHESIS_DATA_API}/hypothesis"
+        max_retries = 6
+        retry_delay = 10 
+        
+        url = f"{HYPOTHESIS_MAIN_ENDPOINT}/hypothesis"
         
         for attempt in range(max_retries):
+        
+         
             response = self._make_api_request("GET", url, token, params={"id": hypothesis_id})
             
             valid, error = self._validate_response(response, required_keys=["status"])
@@ -151,7 +156,9 @@ class HypothesisGeneration:
     def _step_3_get_results(self, token: str, enrich_id: str) -> Dict[str, Any]:
         """Step 3: Get Enrichment Results"""
         logger.info(f"Step 3: Fetching results for enrich ID: {enrich_id}")
+        logger.info(f"Step 3: Fetching results for enrich ID: {enrich_id}")
         url = f"{HYPOTHESIS_DATA_API}/enrich"
+        response = self._make_api_request("GET", url, token, params={"id": enrich_id})
         response = self._make_api_request("GET", url, token, params={"id": enrich_id})
         
         valid, error = self._validate_response(response, required_keys=["GO_terms", "causal_gene"])
@@ -163,7 +170,7 @@ class HypothesisGeneration:
     def _step_4_generate(self, token: str, enrich_id: str, go_term_id: str) -> Dict[str, Any]:
         """Step 4: Generate Final Hypothesis"""
         logger.info(f"Step 4: Generating hypothesis for enrich ID: {enrich_id} and GO: {go_term_id}")
-        url = f"{HYPOTHESIS_DATA_API}/hypothesis"
+        url = f"{HYPOTHESIS_MAIN_ENDPOINT}/hypothesis"
         response = self._make_api_request("POST", url, token, data={"id": enrich_id, "go": go_term_id})
         
         valid, error = self._validate_response(response, required_keys=["summary", "graph"])
@@ -171,6 +178,57 @@ class HypothesisGeneration:
             return {"error": f"Final generation failed: {error}"}
             
         return response
+
+    def get_by_hypothesis_id(self, token: str, hypothesis_id: str, user_id, query=None) -> Dict[str, Any]:
+        """
+        Retrieve hypothesis information by ID.
+        """
+        logger.info(f"Retrieving hypothesis by ID: {hypothesis_id}")
+        emit_to_user(user=user_id,message=f"Retrieving hypothesis by ID: {hypothesis_id}")
+        
+        try:   
+            if query: 
+                emit_to_user(user=user_id,message=f"Processing query with existing hypothesis...")
+                data = {
+                    "query": query,
+                    "hypothesis_id": hypothesis_id}
+                headers = {
+                    "Authorization": f"Bearer {token}"
+                }
+                # Use json=data
+                response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                emit_to_user(user=user_id,message="Successfully processed query with hypothesis")
+                return data
+            else:
+                cached_graph = redis_manager.get_graph_by_id(hypothesis_id)
+                if cached_graph and cached_graph.get("graph_summary"):
+                    logger.info(f"Cache hit for graph_id={hypothesis_id} {cached_graph}")
+                    return {"text": cached_graph["graph_summary"]}
+
+                data = {
+                    "hypothesis_id": hypothesis_id
+                }
+
+                headers = {
+                    "Authorization": f"Bearer {token}"
+                }
+                try:
+                    # Use json=data
+                    response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                    redis_manager.create_graph(graph_id=data['hypothesis_id'], graph_summary=data['summary'])
+                    logger.info(f"Cached generated graph for graph id {data['resource']['id']}")
+                    return data
+                except Exception as e:
+                    logger.error(f"Failed to retrieve hypothesis by ID: {response}")
+                    emit_to_user(user=user_id,message=f"Failed to retrieve hypothesis")
+                    return "NO summaries provided"
+        except Exception as e:
+            emit_to_user(user=user_id,message="Error retrieving hypothesis")
+            return None
 
     def get_by_hypothesis_id(self, token: str, hypothesis_id: str, user_id, query=None) -> Dict[str, Any]:
         """
@@ -238,12 +296,164 @@ class HypothesisGeneration:
                 emit_to_user(user=user_id,message="Warning: Empty response from query formatting")
             else:
                 logger.info(f"Successfully formatted query with {len(response)} parameters")
+            
+            # POST-PROCESSING VALIDATION: Override LLM if it hallucinated the variant
+            import re
+            # Extract all rs numbers from the original query (e.g., rs1421085, rs9999999)
+            regex_variants = re.findall(r'\brs\d+\b', query, re.IGNORECASE)
+            
+            if regex_variants:
+                # User explicitly mentioned a variant
+                user_variant = regex_variants[0]  # Use the first one
+                llm_variant = response.get("variant")
+                
+                if llm_variant and llm_variant.lower() != user_variant.lower():
+                    logger.warning(f"LLM hallucination detected! User said '{user_variant}' but LLM extracted '{llm_variant}'. Overriding.")
+                    response["variant"] = user_variant
+                    emit_to_user(user=user_id, message=f"Corrected variant extraction to {user_variant}")
+                elif not llm_variant:
+                    # LLM missed the variant entirely
+                    logger.warning(f"LLM missed variant. Found '{user_variant}' via regex.")
+                    response["variant"] = user_variant
                 
             return response
         except Exception as e:
             logger.error(f"Error formatting user query: {str(e)}")
             emit_to_user(user=user_id,message=f"Error formatting query")
             return {}
+
+    def get_user_projects(self, token: str) -> List[Dict[str, Any]]:
+        """
+        Fetch the list of projects available to the user.
+        """
+        url = f"{HYPOTHESIS_DATA_API}/projects"
+        try:
+            response = self._make_api_request("GET", url, token)
+            valid, error = self._validate_response(response, required_keys=["projects"])
+            if not valid:
+                logger.error(f"Failed to fetch projects: {error}")
+                return []
+            return response["projects"]
+        except Exception as e:
+            logger.error(f"Error fetching user projects: {e}")
+            return []
+
+    def validate_project_context(self, token: str, variant: str, tissue: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """
+        Phase 3 Validation: Check if the variant and tissue exist in the same project.
+        
+        Returns:
+            Tuple[Optional[str], Optional[Dict]]:
+                - First element: project_id if found, else None
+                - Second element: Error details if validation failed, else None
+        """
+        logger.info(f"Validating project context for Variant: {variant}, Tissue: {tissue}")
+        
+        projects = self.get_user_projects(token)
+        
+        # Scenario 1: No projects exist
+        if not projects:
+            logger.warning("No projects found for user.")
+            return None, {
+                "error_type": "no_projects",
+                "variant": variant,
+                "tissue": tissue
+            }
+        
+        # Track which projects contain each component
+        variant_found_in = []  # List of {project_id, project_name, variants, tissues}
+        tissue_found_in = []   # List of {project_id, project_name, variants, tissues}
+            
+        for project in projects:
+            project_id = project.get("id")
+            project_name = project.get("name")
+            
+            # Fetch project details
+            url = f"{HYPOTHESIS_DATA_API}/projects"
+            details = self._make_api_request("GET", url, token, params={"id": project_id})
+            
+            if "error" in details:
+                continue
+            
+            # Extract variants and tissues from this project
+            project_variants = [h.get("variant") for h in details.get("hypotheses", [])]
+            project_tissues = [t.get("name") for t in details.get("ldsc", {}).get("tissues", [])]
+                
+            # Helper for flexible matching (lowercase, replace spaces/dashes with underscores)
+            def normalize(s: str) -> str:
+                normalized = s.lower().strip().replace(" ", "_").replace("-", "_")
+                # Strip common biological suffixes (e.g., "adipose_subcutaneous_tissue" -> "adipose_subcutaneous")
+                normalized = normalized.replace("_tissue", "").replace("_cell", "").replace("_cells", "")
+                return normalized
+
+            # Check if variant exists in this project (case-insensitive)
+            norm_variant = normalize(variant)
+            has_variant = any(norm_variant == normalize(v) for v in project_variants)
+            
+            # Check if tissue exists in this project (flexible matching)
+            norm_tissue = normalize(tissue)
+            has_tissue = any(norm_tissue == normalize(t) for t in project_tissues)
+            
+            # Track findings
+            if has_variant:
+                # Find the actual variant name from the project for consistent suggesting
+                actual_v = next((v for v in project_variants if normalize(v) == norm_variant), variant)
+                variant_found_in.append({
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "actual_variant": actual_v,
+                    "tissues": project_tissues
+                })
+            
+            if has_tissue:
+                # Find the actual tissue name from the project
+                actual_t = next((t for t in project_tissues if normalize(t) == norm_tissue), tissue)
+                tissue_found_in.append({
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "actual_tissue": actual_t,
+                    "variants": project_variants
+                })
+            
+            # Success case: Both found in same project
+            if has_variant and has_tissue:
+                logger.info(f"Validation Successful: Found matched context in project {project_id}")
+                return project_id, None
+        
+        # If we reach here, validation failed. Determine the specific error type.
+        logger.warning("Validation Failed: No single project contains both variant and tissue.")
+        
+        # Scenario 2: Variant not found anywhere
+        if len(variant_found_in) == 0:
+            # Collect all available variants from all projects
+            all_variants = []
+            for project in projects:
+                project_id = project.get("id")
+                project_name = project.get("name")
+                url = f"{HYPOTHESIS_DATA_API}/projects"
+                details = self._make_api_request("GET", url, token, params={"id": project_id})
+                if "error" not in details:
+                    for h in details.get("hypotheses", []):
+                        all_variants.append({
+                            "variant": h.get("variant"),
+                            "project_name": project_name
+                        })
+            
+            return None, {
+                "error_type": "variant_not_found",
+                "variant": variant,
+                "tissue": tissue,
+                "all_variants": all_variants
+            }
+        
+        # Scenario 3: Mismatch (variant and tissue exist, but in different projects)
+        return None, {
+            "error_type": "mismatch",
+            "variant": variant,
+            "tissue": tissue,
+            "variant_projects": variant_found_in,
+            "tissue_projects": tissue_found_in
+        }
 
     def generate_hypothesis(self, token: str, user_query: str, user_id: str) -> Dict[str, Any]:
         """
@@ -262,9 +472,60 @@ class HypothesisGeneration:
              # Fallback or ask for clarification? For now, error.
              pass
 
-        # Add default project_id if missing
-        if "project_id" not in params:
-            params["project_id"] = "project_auto_gen"
+        # Validate Project Context (Phase 3)
+        validated_project_id, error_details = self.validate_project_context(token, params["variant"], params["tissue_name"])
+        
+        if validated_project_id:
+             params["project_id"] = validated_project_id
+             logger.info(f"Project context valid ation successful. Using project ID: {validated_project_id}")
+             # Add project info to user message
+             emit_to_user(user=user_id, message=f"Found related project: {validated_project_id}")
+        else:
+             # Validation failed - format specific error message based on error type
+             logger.warning(f"Project validation failed for {params['variant']} in {params['tissue_name']}")
+             
+             error_type = error_details.get("error_type")
+             variant = error_details.get("variant")
+             tissue = error_details.get("tissue")
+             
+             # Scenario 1: No projects exist
+             if error_type == "no_projects":
+                 error_message = "No hypothesis is generated: You have no projects. Upload a dataset first."
+                 return {"text": error_message}
+             
+             # Scenario 2: Variant not found anywhere
+             elif error_type == "variant_not_found":
+                 all_variants = error_details.get("all_variants", [])
+                 variant_list = "\n".join([f"- {v['variant']} ({v['project_name']})" for v in all_variants])
+                 
+                 error_message = (
+                     f"No hypothesis is generated: Variant **{variant}** not found in any project.\n\n"
+                     f"**Available variants:**\n{variant_list if variant_list else '(none)'}"
+                 )
+                 return {"text": error_message}
+             
+             # Scenario 3: Mismatch (variant in one project, tissue in another)
+             elif error_type == "mismatch":
+                 variant_projects = error_details.get("variant_projects", [])
+                 tissue_projects = error_details.get("tissue_projects", [])
+                 
+                 # Get the first project containing the variant (for the example message)
+                 variant_project_name = variant_projects[0]["project_name"] if variant_projects else "Unknown"
+                 tissue_project_name = tissue_projects[0]["project_name"] if tissue_projects else "Unknown"
+                 
+                 # Get available tissues for this variant
+                 available_tissues = variant_projects[0]["tissues"] if variant_projects else []
+                 tissue_list = "\n".join([f"- {t}" for t in available_tissues])
+                 
+                 error_message = (
+                     f"No hypothesis is generated: **{variant}** is in {variant_project_name}, but **{tissue}** is in {tissue_project_name}.\n"
+                     f"They must be in the same project.\n\n"
+                     f"For **{variant}**, use these tissues:\n{tissue_list if tissue_list else '(none)'}"
+                 )
+                 return {"text": error_message}
+             
+             # Fallback (should not reach here)
+             return {"text": f"No hypothesis is generated: I couldn't find a project containing both **{variant}** and **{tissue}**."}
 
         # Step 1: Start Enrichment
         emit_to_user(user=user_id, message=f"Starting enrichment for {params.get('variant')}...")
