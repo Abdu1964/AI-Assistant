@@ -6,9 +6,8 @@ from .llm_handle.llm_models import (
 )
 from .prompts.classifier_prompt import (
     classifier_prompt,
-    answer_from_graph,
     main_classifier_prompt,
-    aggeregator_prompt
+    aggregator_prompt
 )
 from .annotation_graph.annotated_graph import Graph
 from .annotation_graph.schema_handler import SchemaHandler
@@ -746,7 +745,7 @@ class AiAssistance:
             if json_format:
                 json_note = "\n\nNote: Structured annotation data is also available for this query."
 
-            prompt = aggeregator_prompt.format(user_query=user_query, combined_text=combined_text, json_note=json_note)
+            prompt = aggregator_prompt.format(user_query=user_query, combined_text=combined_text, json_note=json_note)
 
             aggregated_text = self.advanced_llm.generate(prompt)
             logger.info(f"Successfully aggregated response: {aggregated_text[:100]}...")
@@ -787,6 +786,7 @@ class AiAssistance:
         user_id = state.get("user_id")
         
         logger.info(f"Finalizing response for user: {user_id}")
+        logger.info(f"here is the response : {response}")
         
         # Ensure response has correct structure
         if not isinstance(response, dict):
