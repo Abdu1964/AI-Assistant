@@ -453,7 +453,7 @@ def clear_user_history(current_user_id, auth_token):
 def handle_hypothesis_faq(auth_token):
     import os
     import requests
-    projects_api_url = os.getenv("HYPOTHESIS_PROJECTS_API_URL")
+    projects_api_url = os.getenv("HYPOTHESIS_DATA_API")
     headers = {"Authorization": auth_token}
 
     r = requests.get(projects_api_url, headers=headers, timeout=15)
