@@ -5,7 +5,6 @@ import os
 import subprocess
 import json
 import tempfile
-from app.prompts.galaxy_prompt import GENERATE_RESPONSE
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 logger = logging.getLogger(__name__)
@@ -79,10 +78,7 @@ class GalaxyHandler:
         agent = create_react_agent("openai:gpt-4o", tools)
         response = await agent.ainvoke({"messages": query})
         logger.info(f"OpenAI MCP raw response: {response}")
-
-        llm_prompt = GENERATE_RESPONSE.format(query=query,response=response)
-        clean_text = self.llm.generate(llm_prompt)
-        return {"text": clean_text}
+        return {"text": response}
 
     
     #  Strategy 2 — Subprocess (Gemini / LLMs with async conflicts) 
