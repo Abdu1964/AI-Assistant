@@ -117,11 +117,28 @@ You are a query classifier for a multi-agent system. Analyze the user's query an
    - Galaxy tools, workflows, pipeline recommendations
    - Examples: "What Galaxy tools for RNA-seq?", "create a variant calling workflow"
 
-4. **rag**: General information queries and document retrieval
-   - Questions about uploaded PDFs, web content, user documents
-   - Background information that requires reading provided materials
-   - Examples: "summarize my uploaded PDF", "what does the document say about X"
+4. ```python
+ Available Agent Types:
 
+1. **annotation_biological**: Queries about specific biological entities in the annotation database
+   - Finding/retrieving genes, proteins, transcripts, exons, variants
+   - Exploring relationships between biological entities
+   - Examples: "find gene BRCA1", "show transcripts for TP53", "what exons does IGF1 have"
+
+2. **annotation_general**: Queries about database statistics and metadata
+   - Aggregate counts, database size, data types available
+   - Examples: "how many genes in the database", "what types of variants are stored"
+
+3. **galaxy**: Queries about Galaxy bioinformatics platform
+   - Galaxy tools, workflows, pipeline recommendations
+   - Examples: "What Galaxy tools for RNA-seq?", "create a variant calling workflow"
+
+4. **rag**: Rejuve / Rejuve Bio document knowledge
+   - Queries about Rejuve and Rejuve Bio
+   - Information derived strictly from uploaded Rejuve-related documents
+   - Organizational background, platform details, research focus, products, vision
+   - Content explanation or clarification from stored Rejuve materials
+   
 5. **biogpt**: Biomedical knowledge questions requiring specialized medical/biological expertise
    - Medical symptoms, diseases, drug information
    - Biological processes, mechanisms, pathways (general knowledge, not database-specific)
