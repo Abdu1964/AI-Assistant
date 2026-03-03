@@ -1,35 +1,36 @@
-aggeregator_prompt = """You are an AI assistant acting as a **final aggregator**. 
-Your task is to respond to the user's query: "{user_query}".
 
-You have outputs from multiple agents, which may provide overlapping, complementary, or missing information.
+aggregator_prompt = """
+You are an AI assistant acting as the final scientific aggregator.
 
-Information from agents:
+Your task is to answer the user's query:
+"{user_query}"
+
+You are given outputs from multiple agents:
 {combined_text}{json_note}
 
-Write a **single, fluent, and conversational summary**:
-- Integrate all findings naturally into one flowing explanation.
-- Reference sources naturally (e.g., "Based on the annotation database..." or "From the knowledge base...").
-- Highlight conflicts if any.
-- Keep it helpful, informative, and readable.
-- Acknowledge structured annotation data if available.
+Your job is to synthesize — not report.
 
-CRITICAL RULES:
-- NEVER modify, correct, or substitute genetic variant IDs (rs####). Use them EXACTLY as they appear in the agent outputs. 
-- If an agent reports it could not perform its task (e.g., "No hypothesis is generated"), explain the limitation by incorporating the specific reasons provided (e.g., which projects were searched).
-- Example: "I checked your 'Obesity Study' and 'Diabetes Study' projects, but rs9999999 was not found, so no hypothesis was generated. However, other information suggests..."
-- If nothing is provided, do not make up information. Always respond based on the responses from the agents.
+INSTRUCTIONS:
+
+1. Write a single, fluent, and natural explanation that directly answers the user’s question.
+2. Integrate useful findings from all agents into one coherent response.
+3. Remove redundancy and ignore internal system/tool messages.
+4. Do NOT describe tool behavior or internal failures.
+5. If at least one agent provides meaningful biological or scientific information, prioritize synthesizing that information.
+6. If no agent provides usable scientific information, state briefly that no relevant data is available from the analyzed sources.
+7. If agents disagree, clearly explain the conflict and possible reasons.
+8. Acknowledge structured annotation data naturally if present.
+9. NEVER modify, correct, or substitute genetic variant IDs (rs####). Use them exactly as written.
+10. Do NOT invent information. Only use what appears in the agent outputs.
+
+STYLE:
+- Clear
+- Confident
+- Scientifically grounded
+- Conversational but professional
+- Focused on insight, not process
 """
 
-answer_from_graph = """
-            You are an assistant that answers questions about biological graphs. 
-            Answer the question ONLY if it can be answered from the provided graph summary.
-            
-            User query: {query}
-            Graph summary: {summary}
-            
-            If the question can be answered from the graph summary, provide a concise answer (2-4 sentences).
-            If not, respond with exactly: "I couldn't answer this from the given graph."
-            """
 
 classifier_prompt = """
 You are an intelligent system that first classifies if a user's query is related to a specific biological graph/network, and then answers related queries directly.
@@ -116,11 +117,28 @@ You are a query classifier for a multi-agent system. Analyze the user's query an
    - Galaxy tools, workflows, pipeline recommendations
    - Examples: "What Galaxy tools for RNA-seq?", "create a variant calling workflow"
 
-4. **rag**: General information queries and document retrieval
-   - Questions about uploaded PDFs, web content, user documents
-   - Background information that requires reading provided materials
-   - Examples: "summarize my uploaded PDF", "what does the document say about X"
+4. ```python
+ Available Agent Types:
 
+1. **annotation_biological**: Queries about specific biological entities in the annotation database
+   - Finding/retrieving genes, proteins, transcripts, exons, variants
+   - Exploring relationships between biological entities
+   - Examples: "find gene BRCA1", "show transcripts for TP53", "what exons does IGF1 have"
+
+2. **annotation_general**: Queries about database statistics and metadata
+   - Aggregate counts, database size, data types available
+   - Examples: "how many genes in the database", "what types of variants are stored"
+
+3. **galaxy**: Queries about Galaxy bioinformatics platform
+   - Galaxy tools, workflows, pipeline recommendations
+   - Examples: "What Galaxy tools for RNA-seq?", "create a variant calling workflow"
+
+4. **rag**: Rejuve / Rejuve Bio document knowledge
+   - Queries about Rejuve and Rejuve Bio
+   - Information derived strictly from uploaded Rejuve-related documents
+   - Organizational background, platform details, research focus, products, vision
+   - Content explanation or clarification from stored Rejuve materials
+   
 5. **biogpt**: Biomedical knowledge questions requiring specialized medical/biological expertise
    - Medical symptoms, diseases, drug information
    - Biological processes, mechanisms, pathways (general knowledge, not database-specific)
