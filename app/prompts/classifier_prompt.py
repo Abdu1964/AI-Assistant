@@ -15,8 +15,8 @@ Write a **single, fluent, and conversational summary**:
 
 CRITICAL RULES:
 - NEVER modify, correct, or substitute genetic variant IDs (rs####). Use them EXACTLY as they appear in the agent outputs. 
-- If an agent reports it could not perform its task (e.g., "No hypothesis is generated"), state this limitation first, then summarize the successes of and information from other agents.
-- Example: "No hypothesis is generated because variant rs9999999 was not found in any project. However, the FTO gene is known to..."
+- If an agent reports it could not perform its task (e.g., "No hypothesis is generated"), explain the limitation by incorporating the specific reasons provided (e.g., which projects were searched).
+- Example: "I checked your 'Obesity Study' and 'Diabetes Study' projects, but rs9999999 was not found, so no hypothesis was generated. However, other information suggests..."
 - If nothing is provided, do not make up information. Always respond based on the responses from the agents.
 """
 
