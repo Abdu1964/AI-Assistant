@@ -450,6 +450,98 @@ def clear_user_history(current_user_id, auth_token):
         return jsonify(error=f"Error clearing history: {str(e)}"), 500
 
 
+def handle_hypothesis_faq(auth_token):
+    import os
+    import requests
+    projects_api_url = os.getenv("HYPOTHESIS_DATA_API")
+    headers = {"Authorization": auth_token}
+
+    r = requests.get(projects_api_url, headers=headers, timeout=15)
+    if r.status_code != 200:
+        print("Projects API failed:", r.text)
+        return None
+
+    projects = r.json().get("projects", [])
+    if not projects:
+        print("No projects found")
+        return None
+
+    project_map = []
+    all_genes = set()
+    all_tissues = set()
+    all_phenotypes = set()
+
+    for p in projects:
+        pid = p.get("id")
+        name = p.get("name")
+        phenotype = p.get("phenotype")
+
+        if not pid:
+            continue
+
+        d = requests.get(
+            projects_api_url,
+            headers=headers,
+            params={"id": pid},
+            timeout=15
+        )
+
+        if d.status_code != 200:
+            print(f"Project {pid} detail failed")
+            continue
+
+        data = d.json()
+
+        genes = set()
+        tissues = set()
+
+        for h in data.get("hypotheses", []):
+            if h.get("causal_gene"):
+                genes.add(h["causal_gene"])
+                all_genes.add(h["causal_gene"])
+
+        for t in data.get("ldsc", {}).get("tissues", []):
+            if t.get("name"):
+                tissues.add(t["name"])
+                all_tissues.add(t["name"])
+
+        if phenotype:
+            all_phenotypes.add(phenotype)
+
+        project_map.append({
+            "project_id": pid,
+            "project_name": name,
+            "phenotype": phenotype,
+            "causal_genes": list(genes),
+            "tissues": list(tissues)
+        })
+
+    if not project_map:
+        print("No usable hypothesis data")
+        return None
+
+    # LLM once with all info
+    llm_prompt = f"""
+                Here are hypothesis results grouped by project:
+
+                {json.dumps(project_map, indent=2)}
+
+                Generate 3 example research questions based on:
+                - project phenotypes
+                - causal genes
+                - tissues
+
+                Return JSON list of strings only.
+                """
+    ai_assistant = current_app.config["ai_assistant"]
+    llm_response = ai_assistant.advanced_llm.generate(llm_prompt)
+    return jsonify({
+        "text": "Here’s your hypothesis-based AI-generated questions:",
+        "projects": project_map,
+        "sample_questions": llm_response
+    }), 200
+
+   
 
 @main_bp.route("/faq", methods=["GET"])
 @token_required
@@ -459,31 +551,27 @@ def get_faq_intro(current_user_id,auth_token):
     No authentication required - public endpoint for discovery.
     """
     try:
-        questions = mongo_db_manager.get_all_faq_questions()
-        
+        context = request.args.get("context",None)
+        if context == "hypothesis":
+            return handle_hypothesis_faq(auth_token)
+
+        questions = mongo_db_manager.get_all_faq_questions(context)
         question_list = [
-            {
-                "id": q["question_id"],
-                "text": q["question_text"],
-                "link": f"/faq/{q['question_id']}"
-            }
+            {"id": q["question_id"], "text": q["question_text"], "link": f"/faq/{q['question_id']}"}
             for q in questions
         ]
-        
+
         return jsonify({
-            "text": (
-                "Hello! I’m MOZI, your AI assistant for exploring and annotating "
+            "text": "Hello! I’m MOZI, your AI assistant for exploring and annotating "
                 "biomedical entities in the BioAtomspace. "
-                "To help you get started, here are some example questions you can try. "
-                "Just click one to begin:"
-            ),
+                f"To help you get started, here are some example questions you can try on {context} "
+                "Just click one to begin:",
             "questions": question_list
         }), 200
-
     except Exception as e:
-        current_app.logger.error(f"Error in FAQ intro: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+            current_app.logger.error(f"Error in FAQ intro: {e}")
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
 
 
 @main_bp.route("/faq/<question_id>", methods=["GET"])
