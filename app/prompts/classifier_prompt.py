@@ -19,7 +19,6 @@ CRITICAL RULES:
 - Example: "I checked your 'Obesity Study' and 'Diabetes Study' projects, but rs9999999 was not found, so no hypothesis was generated. However, other information suggests..."
 - If nothing is provided, do not make up information. Always respond based on the responses from the agents.
 """
-
 answer_from_graph = """
             You are an assistant that answers questions about biological graphs. 
             Answer the question ONLY if it can be answered from the provided graph summary.
