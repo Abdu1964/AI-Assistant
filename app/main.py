@@ -18,7 +18,7 @@ from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
 from .socket_manager import emit_to_user
 from .Galaxy_integration.galaxy import GalaxyHandler
-from .biogpt_agent.biogpt import BioGPTAgent
+from .biogpt_agent.biogpt import BioGPTAgentOpenVINO
 from typing import TypedDict, List, Annotated, Any, Dict, Optional
 from flask_socketio import emit
 from dotenv import load_dotenv
@@ -97,7 +97,7 @@ class AiAssistance:
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
         self.galaxy_handler = GalaxyHandler(advanced_llm, qdrant_client, embedding_model)
         self.embedding_model = embedding_model
-        self.biogpt = BioGPTAgent(llm=advanced_llm)
+        self.biogpt = BioGPTAgentOpenVINO(llm=advanced_llm)
 
         logger.info(
             f"AiAssistance initialized with advanced_llm: {type(self.advanced_llm).__name__}"
@@ -730,6 +730,11 @@ class AiAssistance:
         try:
             sources_info = []
             for output in agent_outputs:
+                logger.info("=== [%s] source=%s ===\n%s", 
+                output['agent'], 
+                output.get('source', 'unknown'), 
+                str(output.get('content', ''))[:300])
+
                 content = output.get("content", "")
                 # Handle if content is a dict (convert to string)
                 if isinstance(content, dict):
