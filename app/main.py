@@ -903,11 +903,10 @@ class AiAssistance:
                 history = []
                 memory = []
                 for item in user_information:
-                    q = item["QUESTION"]["question"]
-                    c = item["QUESTION"]["context"]
-                    m = item["MEMORIES"]
+                    q = item["question"]
+                    c = item["context"]
                     history.append({"question": q, "context": c})
-                    memory.append(m)
+                    memory.append(c["memory"])
             except Exception as e:
                 history = []
                 memory = []
