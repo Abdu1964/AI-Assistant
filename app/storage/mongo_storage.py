@@ -191,35 +191,17 @@ class MongoManager:
             logger.error(f"Error cleaning old user records: {e}")
 
     def get_context_and_memory(self, user_id: str):
-        """
-        Get context and memory for a user (used for conversation context).
-        Returns recent conversation history in a specific format.
-        """
         try:
             cursor = (
                 self.user_info_collection.find({"user_id": user_id})
-                .sort("time", 1)
-                .limit(10)
+                .sort("time", -1)
+                .limit(3)
             )
             records = list(cursor)
+            records.reverse()
+
             result = []
-
             for record in records:
-                question = record.get("user_question", "")
-                
-                # Parse context if exists
-                context = None
-                if record.get("context"):
-                    try:
-                        context_data = json.loads(record["context"])
-                        if "content" in context_data:
-                            content = context_data["content"]
-                            context = json.loads(content) if isinstance(content, str) else content
-                        else:
-                            context = context_data
-                    except (json.JSONDecodeError, TypeError):
-                        context = None
-
                 # Parse memory if exists
                 memory = None
                 if record.get("memory"):
@@ -233,13 +215,16 @@ class MongoManager:
                     except (json.JSONDecodeError, TypeError):
                         memory = None
 
-                # Default to empty string if no memory
                 if memory in [None, []]:
                     memory = ""
 
                 result.append({
-                    "QUESTION": {"question": question, "context": context},
-                    "MEMORIES": memory,
+                    "question": record.get("user_question", ""),
+                    "context": {
+                        "answer": record.get("assistant_answer", ""),
+                        "agents_used": record.get("agents_used", []),
+                        "memory": memory,
+                    },
                 })
 
             return result
@@ -247,9 +232,6 @@ class MongoManager:
         except Exception as e:
             logger.error(f"Error getting context and memory: {e}")
             return []
-
-    # ==================== CONTENT FILE METHODS ====================
-
     def add_content_file(
         self,
         user_id: str,
