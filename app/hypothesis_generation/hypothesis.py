@@ -437,7 +437,7 @@ class HypothesisGeneration:
              
              # Scenario 1: No projects exist
              if error_type == "no_projects":
-                 error_message = "No hypothesis is generated: You have no projects. Upload a dataset first."
+                 error_message = "Since there’s no project created yet, you can use the platform UI to generate a new hypothesis. In the meantime, I can still assist you based on the hypotheses you’ve already generated."
                  return {"text": error_message}
              
              # Scenario 2: Variant not found anywhere
