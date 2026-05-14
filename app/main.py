@@ -334,10 +334,12 @@ class AiAssistance:
             if pipeline_response.get("success", False):
                 summary = pipeline_response.get("summary", "")
                 json_format = pipeline_response.get("json_format", None)
+                validation_report = pipeline_response.get("validation_report", {})
 
                 response_dict = {
                     "text": summary if summary else "",
                     "json_format": json_format,
+                    "validation_report": validation_report,
                     "source": "annotation database"
                 }
 
@@ -625,6 +627,7 @@ class AiAssistance:
 
         agent_outputs = []
         json_format = None
+        validation_report = {}
 
         # ---------------- Annotation Agent ----------------
         annotation_resp = state.get("annotation_response")
@@ -632,6 +635,7 @@ class AiAssistance:
             # Use text or summary if available
             text_content = annotation_resp.get("text") or annotation_resp.get("summary") or ""
             json_format = annotation_resp.get("json_format")
+            validation_report = annotation_resp.get("validation_report", {})
 
             if text_content:
                 agent_outputs.append({
@@ -711,9 +715,23 @@ class AiAssistance:
 
         # ---------------- Handle JSON-only case ----------------
         if json_format and not agent_outputs:
+            nodes = json_format.get("nodes", [])
+            validated = [n for n in nodes if n.get("validated", True)]
+            failed = [n for n in nodes if not n.get("validated", True)]
+
+            def node_label(n):
+                props = n.get("properties", {})
+                name = next(iter(props.values()), None)
+                return f"{n.get('type')}({name})" if name else n.get("type")
+
+            text = "Annotation visualization structure format is created successfully (see structured data)."
+            if failed:
+                failed_names = ", ".join(node_label(n) for n in failed)
+                text += f" Note: {failed_names} could not be found in the database and may not exist."
+
             return {
                 "response": {
-                    "text": "Annotation visualization structure format is created successfully (see structured data).",
+                    "text": text,
                     "json_format": json_format
                 }
             }
