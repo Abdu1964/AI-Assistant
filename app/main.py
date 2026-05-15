@@ -716,18 +716,40 @@ class AiAssistance:
         # ---------------- Handle JSON-only case ----------------
         if json_format and not agent_outputs:
             nodes = json_format.get("nodes", [])
-            validated = [n for n in nodes if n.get("validated", True)]
-            failed = [n for n in nodes if not n.get("validated", True)]
+            logger.info(f"[note-check] node statuses: { {n.get('node_id'): n.get('status') for n in nodes} }")
+            failed = [n for n in nodes if n.get("status") is False]
+            logger.info(f"[note-check] failed nodes: {[n.get('node_id') for n in failed]}")
 
-            def node_label(n):
-                props = n.get("properties", {})
-                name = next(iter(props.values()), None)
-                return f"{n.get('type')}({name})" if name else n.get("type")
-
-            text = "Annotation visualization structure format is created successfully (see structured data)."
+            text = "The annotation structure was created successfully (see structured data)."
             if failed:
-                failed_names = ", ".join(node_label(n) for n in failed)
-                text += f" Note: {failed_names} could not be found in the database and may not exist."
+                missing_parts = []
+                all_suggestions = []  # list of (original, suggestion) tuples
+                for n in failed:
+                    not_validated = n.get("not_validated")
+                    suggestions = n.get("suggestions", {})
+                    if not_validated:
+                        items = not_validated if isinstance(not_validated, list) else [not_validated]
+                        for item in items:
+                            missing_parts.append(f'"{item}"')
+                            suggestion = suggestions.get(item)
+                            if suggestion:
+                                all_suggestions.append((item, suggestion))
+                    else:
+                        props = n.get("properties", {})
+                        name = next(iter(props.values()), n.get("type", "unknown"))
+                        missing_parts.append(f'"{name}"')
+                        suggestion = n.get("suggestion")
+                        if suggestion:
+                            all_suggestions.append((name, suggestion))
+                verb = "was" if len(missing_parts) == 1 else "were"
+                joined = ", ".join(missing_parts)
+                text += f" Note: {joined} {verb} not found in the database but {verb} included in the structure based on the provided information."
+                if all_suggestions:
+                    if len(all_suggestions) == 1:
+                        text += f" Did you mean \"{all_suggestions[0][1]}\"?"
+                    else:
+                        did_you_mean = ", ".join(f'"{orig}" → "{sugg}"' for orig, sugg in all_suggestions)
+                        text += f" Did you mean: {did_you_mean}?"
 
             return {
                 "response": {
