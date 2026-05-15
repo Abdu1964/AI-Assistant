@@ -18,7 +18,7 @@ from .summarizer import Graph_Summarizer
 from .hypothesis_generation.hypothesis import HypothesisGeneration
 from .socket_manager import emit_to_user
 from .Galaxy_integration.galaxy import GalaxyHandler
-from .biogpt_agent.biogpt import BioGPTAgent
+from .biogpt_agent.biogpt import BioGPTAgentOpenVINO
 from typing import TypedDict, List, Annotated, Any, Dict, Optional
 from flask_socketio import emit
 from dotenv import load_dotenv
@@ -97,7 +97,7 @@ class AiAssistance:
         self.hypothesis_generation = HypothesisGeneration(advanced_llm)
         self.galaxy_handler = GalaxyHandler(advanced_llm, qdrant_client, embedding_model)
         self.embedding_model = embedding_model
-        self.biogpt = BioGPTAgent(llm=advanced_llm)
+        self.biogpt = BioGPTAgentOpenVINO(llm=advanced_llm)
 
         logger.info(
             f"AiAssistance initialized with advanced_llm: {type(self.advanced_llm).__name__}"
@@ -334,10 +334,12 @@ class AiAssistance:
             if pipeline_response.get("success", False):
                 summary = pipeline_response.get("summary", "")
                 json_format = pipeline_response.get("json_format", None)
+                validation_report = pipeline_response.get("validation_report", {})
 
                 response_dict = {
                     "text": summary if summary else "",
                     "json_format": json_format,
+                    "validation_report": validation_report,
                     "source": "annotation database"
                 }
 
@@ -625,6 +627,7 @@ class AiAssistance:
 
         agent_outputs = []
         json_format = None
+        validation_report = {}
 
         # ---------------- Annotation Agent ----------------
         annotation_resp = state.get("annotation_response")
@@ -632,6 +635,7 @@ class AiAssistance:
             # Use text or summary if available
             text_content = annotation_resp.get("text") or annotation_resp.get("summary") or ""
             json_format = annotation_resp.get("json_format")
+            validation_report = annotation_resp.get("validation_report", {})
 
             if text_content:
                 agent_outputs.append({
@@ -711,9 +715,45 @@ class AiAssistance:
 
         # ---------------- Handle JSON-only case ----------------
         if json_format and not agent_outputs:
+            nodes = json_format.get("nodes", [])
+            logger.info(f"[note-check] node statuses: { {n.get('node_id'): n.get('status') for n in nodes} }")
+            failed = [n for n in nodes if n.get("status") is False]
+            logger.info(f"[note-check] failed nodes: {[n.get('node_id') for n in failed]}")
+
+            text = "The annotation structure was created successfully (see structured data)."
+            if failed:
+                missing_parts = []
+                all_suggestions = []  # list of (original, suggestion) tuples
+                for n in failed:
+                    not_validated = n.get("not_validated")
+                    suggestions = n.get("suggestions", {})
+                    if not_validated:
+                        items = not_validated if isinstance(not_validated, list) else [not_validated]
+                        for item in items:
+                            missing_parts.append(f'"{item}"')
+                            suggestion = suggestions.get(item)
+                            if suggestion:
+                                all_suggestions.append((item, suggestion))
+                    else:
+                        props = n.get("properties", {})
+                        name = next(iter(props.values()), n.get("type", "unknown"))
+                        missing_parts.append(f'"{name}"')
+                        suggestion = n.get("suggestion")
+                        if suggestion:
+                            all_suggestions.append((name, suggestion))
+                verb = "was" if len(missing_parts) == 1 else "were"
+                joined = ", ".join(missing_parts)
+                text += f" Note: {joined} {verb} not found in the database but {verb} included in the structure based on the provided information."
+                if all_suggestions:
+                    if len(all_suggestions) == 1:
+                        text += f" Did you mean \"{all_suggestions[0][1]}\"?"
+                    else:
+                        did_you_mean = ", ".join(f'"{orig}" → "{sugg}"' for orig, sugg in all_suggestions)
+                        text += f" Did you mean: {did_you_mean}?"
+
             return {
                 "response": {
-                    "text": "Annotation visualization structure format is created successfully (see structured data).",
+                    "text": text,
                     "json_format": json_format
                 }
             }
@@ -730,6 +770,11 @@ class AiAssistance:
         try:
             sources_info = []
             for output in agent_outputs:
+                logger.info("=== [%s] source=%s ===\n%s", 
+                output['agent'], 
+                output.get('source', 'unknown'), 
+                str(output.get('content', ''))[:300])
+
                 content = output.get("content", "")
                 # Handle if content is a dict (convert to string)
                 if isinstance(content, dict):
@@ -898,11 +943,10 @@ class AiAssistance:
                 history = []
                 memory = []
                 for item in user_information:
-                    q = item["QUESTION"]["question"]
-                    c = item["QUESTION"]["context"]
-                    m = item["MEMORIES"]
+                    q = item["question"]
+                    c = item["context"]
                     history.append({"question": q, "context": c})
-                    memory.append(m)
+                    memory.append(c["memory"])
             except Exception as e:
                 history = []
                 memory = []
