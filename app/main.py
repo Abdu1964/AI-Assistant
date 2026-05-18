@@ -720,7 +720,32 @@ class AiAssistance:
             failed = [n for n in nodes if n.get("status") is False]
             logger.info(f"[note-check] failed nodes: {[n.get('node_id') for n in failed]}")
 
+            substituted = []
+            for n in nodes:
+                if n.get("status") is False and n.get("suggestion") and not n.get("not_validated"):
+                    props = n.get("properties", {})
+                    suggestion = n.pop("suggestion")
+                    for key in props:
+                        substituted.append((props[key], suggestion))
+                        props[key] = suggestion
+                        break
+                    n["status"] = True
+                    n.pop("validation_error", None)
+
+            failed = [n for n in nodes if n.get("status") is False]
+
             text = "The annotation structure was created successfully (see structured data)."
+
+            # Single-node substitution: the queried value didn't exist, closest match was used
+            if substituted:
+                if len(substituted) == 1:
+                    orig, sub = substituted[0]
+                    text += f' Note: "{orig}" was not found in the database. The structure was created for the closest match "{sub}" instead — did you mean "{sub}"?'
+                else:
+                    pairs = ", ".join(f'"{o}" → "{s}"' for o, s in substituted)
+                    text += f" Note: The following were not found and substituted with the closest match: {pairs}."
+
+            # Failed nodes: not found and no suitable match (list nodes or truly missing)
             if failed:
                 missing_parts = []
                 all_suggestions = []  # list of (original, suggestion) tuples
