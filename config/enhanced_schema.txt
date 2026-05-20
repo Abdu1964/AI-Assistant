@@ -2,164 +2,387 @@
 
 #### Node Properties:
 - **gene**
-  - `end`: STRING Example: "14409"
-  - `gene_type`: STRING Example: "lncRNA"
-  - `start`: STRING Example: "11869"
-  - `id`: STRING Example: "ensg00000290825"
-  - `synonyms`: STRING Example: "["HGNC:37102", "DEAD/H (Asp-Glu-Ala-Asp/His) box p"]"
-  - `chr`: STRING Example: "chr1"
-  - `gene_name`: STRING Example: "DDX11L2"
+  - `id`: STRING Example: "ensg00000290825" — use for querying by database ID (lowercase)
+  - `gene_name`: STRING Example: "BRCA1" — use for querying by gene name
+  - `gene_type`: STRING Example: "protein_coding"
+  - `synonym`: STRING Example: '["HGNC:1100", "breast cancer type 1 susceptibility protein"]'
+  - `chr`: STRING Example: "chr17"
+  - `start`: INTEGER Example: 43044295
+  - `end`: INTEGER Example: 43125483
+  - `source`: STRING Example: "GENCODE"
+  - `source_url`: STRING Example: "https://www.gencodegenes.org/"
+
 - **transcript**
-  - `transcript_name`: STRING Example: "TP73-AS1-213"
-  - `transcript_type`: STRING Example: "processed_transcript"
-  - `transcript_id`: STRING Example: "ENST00000647831.1"
-  - `end`: STRING Example: "3747336"
-  - `gene_name`: STRING Example: "TP73-AS1"
-  - `start`: STRING Example: "3736193"
-  - `id`: STRING Example: "enst00000647831"
-  - `chr`: STRING Example: "chr1"
+  - `id`: STRING Example: "enst00000357654" — lowercase database ID
+  - `transcript_id`: STRING Example: "ENST00000357654.9" — use for querying by transcript ID
+  - `transcript_name`: STRING Example: "BRCA1-201" — use for querying by transcript name
+  - `transcript_type`: STRING Example: "protein_coding"
+  - `chr`: STRING Example: "chr17"
+  - `start`: INTEGER Example: 43044295
+  - `end`: INTEGER Example: 43125483
+  - `gene_name`: STRING Example: "BRCA1"
+
 - **exon**
-  - `gene_id`: STRING Example: "ENSG00000127054"
-  - `exon_id`: STRING Example: "ENSE00003521162"
-  - `exon_number`: STRING Example: "13"
-  - `chr`: STRING Example: "chr1"
-  - `transcript_id`: STRING Example: "ENST00000540437"
-  - `start`: STRING Example: "1313035"
-  - `end`: STRING Example: "1313124"
-  - `id`: STRING Example: "ense00003521162"
-- **super_enhancer**
-  - `end`: STRING Example: "12620027"
-  - `se_id`: STRING Example: "SE_03009"
-  - `start`: STRING Example: "12590973"
-  - `id`: STRING Example: "chr1_12590973_12620027_grch38"
-  - `chr`: STRING Example: "chr1"
-- **clo**
-  - `term_name`: STRING Example: "GM03398 cell"
-  - `id`: STRING Example: "clo_0016338"
-  - `synonyms`: STRING Example: "[]"
-- **enhancer**
-  - `start`: STRING Example: "16383001"
-  - `end`: STRING Example: "16383360"
-  - `id`: STRING Example: "chr1_16383001_16383360_grch38"
-  - `chr`: STRING Example: "chr1"
-  - `data_source`: STRING 
-  - `enhancer_id`: STRING 
-- **go**
-  - `id`: STRING Example: "go_1903719"
-  - `synonyms`: STRING Example: "["regulation of IKB phosphorylation", "regulation "]"
-  - `term_name`: STRING Example: "regulation of I-kappaB phosphorylation"
-  - `subontology`: STRING Example: "biological_process"
-- **pathway**
-  - `pathway_name`: STRING Example: "2-LTR circle formation"
-  - `id`: STRING Example: "r-hsa-164843"
-- **tfbs**
-  - `end`: STRING Example: "905085"
-  - `id`: STRING Example: "chr1_904520_905085_grch38"
-  - `chr`: STRING Example: "chr1"
-  - `start`: STRING Example: "904520"
-- **uberon**
-  - `synonyms`: STRING Example: "["r5"]"
-  - `term_name`: STRING Example: "rhombomere 5"
-  - `id`: STRING Example: "uberon_0005515"
-- **bto**
-  - `synonyms`: STRING Example: "[]"
-  - `term_name`: STRING Example: "HVEC cell"
-  - `id`: STRING Example: "bto_0005845"
-- **cl**
-  - `term_name`: STRING Example: "kidney inner medulla interstitial cell"
-  - `label`: STRING Available options: ['cl']
-  - `id`: STRING Example: "cl_1000803"
-  - `synonyms`: STRING Example: "[]"
+  - `id`: STRING Example: "ense00003521162" — lowercase database ID
+  - `exon_id`: STRING Example: "ENSE00003521162" — use for querying by exon ID
+  - `exon_number`: INTEGER Example: 13
+  - `chr`: STRING Example: "chr17"
+  - `start`: INTEGER Example: 1313035
+  - `end`: INTEGER Example: 1313124
+  - `transcript_id`: STRING Example: "ENST00000357654"
+  - `gene_id`: STRING Example: "ENSG00000012048"
+
+- **protein**
+  - `id`: STRING Example: "p38398" — UniProt accession (lowercase)
+  - `protein_name`: STRING Example: "BRCA1"
+  - `accessions`: STRING Example: '["P38398", "Q4FZB6"]'
+  - `is_canonical`: BOOLEAN Example: true
+  - `is_isoform`: BOOLEAN Example: false
+  - `canonical_accession`: STRING Example: "P38398"
+  - `isoform_name`: STRING Example: "BRCA1-2"
+  - `source`: STRING Example: "UniProt"
+  - `source_url`: STRING Example: "https://www.uniprot.org/"
+
 - **promoter**
-  - `start`: STRING Example: "959246"
-  - `end`: STRING Example: "959305"
   - `id`: STRING Example: "chr1_959246_959305_grch38"
   - `chr`: STRING Example: "chr1"
-- **protein**
-  - `id`: STRING Example: "q9nr81"
-  - `synonyms`: STRING Example: "["AGR:HGNC:683", "AlphaFoldDB:Q9NR81", "Antibodype"]"
-  - `accessions`: STRING Example: "["A8K5U7", "Q4FZB6", "Q4QQI5", "Q4QQQ0", "Q59F00","]"
-  - `protein_name`: STRING Example: "ARHG3"
-- **snp**
+  - `start`: INTEGER Example: 959246
+  - `end`: INTEGER Example: 959305
+  - `development_stage`: STRING Example: '["embryo", "adult"]'
+  - `ccre_module`: INTEGER Example: 5
+  - `taxon_id`: STRING Example: "9606"
+
+- **enhancer**
+  - `id`: STRING Example: "chr1_16383001_16383360_grch38"
   - `chr`: STRING Example: "chr1"
-  - `start`: STRING Example: "733014"
-  - `end`: STRING Example: "733014"
-  - `caf_alt`: STRING Example: "0.006989"
-  - `id`: STRING Example: "rs201221815"
-  - `ref`: STRING Example: "AG"
-  - `caf_ref`: STRING Example: "0.993"
-  - `alt`: STRING Example: "A"
-  - `raw_cadd_score`: STRING Example: "0.132004"
-  - `phred_score`: STRING Example: "4.787"
-- **efo**
-  - `synonyms`: STRING Example: "[]"
-  - `id`: STRING Example: "efo_0008843"
-  - `term_name`: STRING Example: "PAL-seq"
-  - `description`: STRING Example: "Poly(A)-tail length profiling by sequencing (PAL-s"
+  - `start`: INTEGER Example: 16383001
+  - `end`: INTEGER Example: 16383360
+  - `data_source`: STRING Example: "ENCODE"
+  - `enhancer_id`: STRING Example: "EH38E1516979"
+  - `development_stage`: STRING Example: '["embryo"]'
+  - `ccre_module`: INTEGER Example: 3
+  - `taxon_id`: STRING Example: "9606"
+
+- **super_enhancer**
+  - `id`: STRING Example: "chr1_12590973_12620027_grch38"
+  - `chr`: STRING Example: "chr1"
+  - `start`: INTEGER Example: 12590973
+  - `end`: INTEGER Example: 12620027
+  - `se_id`: STRING Example: "SE_03009"
+
 - **non_coding_rna**
-  - `chr`: STRING Example: "chr9"
-  - `start`: STRING Example: "10297"
   - `id`: STRING Example: "urs000035f234"
-  - `end`: STRING Example: "10320"
+  - `chr`: STRING Example: "chr9"
+  - `start`: INTEGER Example: 10297
+  - `end`: INTEGER Example: 10320
   - `rna_type`: STRING Example: "piRNA"
-- **tad**
-  - `end`: STRING Example: "113000000"
-  - `id`: STRING Example: "chrx_111750000_113000000_grch38"
-  - `chr`: STRING Example: "chrX"
-  - `genes`: STRING Example: "["ENSG00000101901", "ENSG00000072315", "ENSG000002"]"
-  - `start`: STRING Example: "111750000"
+
+- **regulatory_region**
+  - `id`: STRING Example: "chr1_959246_959305_grch38"
+  - `chr`: STRING Example: "chr1"
+  - `start`: INTEGER Example: 959246
+  - `end`: INTEGER Example: 959305
+  - `cell`: STRING Example: "K562"
+  - `biochemical_activity`: STRING Example: "H3K27ac"
+  - `biological_context`: STRING Example: "liver"
+
+- **snp**
+  - `id`: STRING Example: "rs201221815" — use for querying by rsID
+  - `chr`: STRING Example: "chr1"
+  - `start`: INTEGER Example: 733014
+  - `end`: INTEGER Example: 733014
+  - `ref`: STRING Example: "AG"
+  - `alt`: STRING Example: "A"
+  - `caf_ref`: STRING Example: "0.993"
+  - `caf_alt`: STRING Example: "0.006989"
+  - `raw_cadd_score`: FLOAT Example: 0.132004
+  - `phred_score`: FLOAT Example: 4.787
+  - `polyphen2_humdiv_score`: FLOAT Example: 0.95
+  - `polyphen2_humdiv_prediction`: STRING Example: "probably_damaging"
+  - `polyphen2_humvar_score`: FLOAT Example: 0.92
+  - `polyphen2_humvar_prediction`: STRING Example: "probably_damaging"
+
 - **structural_variant**
-  - `start`: STRING Example: "10002"
-  - `end`: STRING Example: "22118"
   - `id`: STRING Example: "chr1_10002_22118_grch38"
-  - `evidence`: STRING Example: "pubmed:23825009"
+  - `chr`: STRING Example: "chr1"
+  - `start`: INTEGER Example: 10002
+  - `end`: INTEGER Example: 22118
   - `variant_accession`: STRING Example: "dgv1n82"
   - `variant_type`: STRING Example: "duplication"
-  - `chr`: STRING Example: "chr1"
+  - `evidence`: STRING Example: "pubmed:23825009"
 
-Note 
-- transcription factor have label `gene`
+- **sequence_variant**
+  - `id`: STRING Example: "rs121912431"
+  - `chr`: STRING Example: "chr17"
+  - `start`: INTEGER Example: 43092919
+  - `end`: INTEGER Example: 43092919
+  - `rsid`: STRING Example: "rs121912431"
+  - `ref`: STRING Example: "A"
+  - `alt`: STRING Example: "G"
+  - `raw_cadd_score`: FLOAT Example: 28.5
+  - `phred_score`: FLOAT Example: 28.5
+
+- **pathway**
+  - `id`: STRING Example: "r-hsa-164843"
+  - `pathway_name`: STRING Example: "2-LTR circle formation"
+  - `pathway_url`: STRING Example: "https://reactome.org/content/detail/R-HSA-164843"
+  - `evidence`: STRING Example: "IMP"
+  - `source`: STRING Example: "Reactome"
+
+- **reaction**
+  - `id`: STRING Example: "r-hsa-140342"
+  - `reaction_name`: STRING Example: "Dissociation of p-beta-catenin from cadherin"
+  - `reaction_url`: STRING Example: "https://reactome.org/"
+  - `evidence`: STRING Example: "IMP"
+  - `source`: STRING Example: "Reactome"
+
+- **tad**
+  - `id`: STRING Example: "chrx_111750000_113000000_grch38"
+  - `chr`: STRING Example: "chrX"
+  - `start`: INTEGER Example: 111750000
+  - `end`: INTEGER Example: 113000000
+
+- **motif**
+  - `id`: STRING Example: "hocomoco_brca1"
+  - `tf_name`: STRING Example: "BRCA1"
+  - `length`: INTEGER Example: 12
+  - `chr`: STRING Example: "chr1"
+  - `source`: STRING Example: "HOCOMOCO"
+
+- **tfbs**
+  - `id`: STRING Example: "chr1_904520_905085_grch38"
+  - `chr`: STRING Example: "chr1"
+  - `start`: INTEGER Example: 904520
+  - `end`: INTEGER Example: 905085
+
+- **chromosome_chain**
+  - `id`: STRING Example: "chr1_0_10000_grch38"
+  - `chr`: STRING Example: "chr1"
+  - `chain_id`: STRING Example: "chain_1"
+  - `next_start`: INTEGER Example: 10000
+  - `resolution`: STRING Example: "5000"
+
+- **chromosome**
+  - `id`: STRING Example: "chr1_grch38"
+  - `chr`: STRING Example: "chr1"
+  - `chromosome_id`: STRING Example: "chr1"
+
+- **anatomy**
+  - `id`: STRING Example: "uberon_0002048" — use for querying by UBERON ID
+  - `term_name`: STRING Example: "lung" — use for querying by anatomical structure name
+  - `synonym`: STRING Example: '["pulmo", "pulmonary"]'
+  - `description`: STRING Example: "Organ of the respiratory system"
+
+- **tissue**
+  - `id`: STRING Example: "bto_0000567" — BRENDA Tissue Ontology
+  - `term_name`: STRING Example: "liver"
+  - `synonym`: STRING Example: '[]'
+
+- **cell_type**
+  - `id`: STRING Example: "cl_0000057" — Cell Ontology
+  - `term_name`: STRING Example: "fibroblast"
+  - `synonym`: STRING Example: '["fibrocyte"]'
+
+- **cell_line**
+  - `id`: STRING Example: "clo_0016338" — Cell Line Ontology
+  - `term_name`: STRING Example: "GM03398 cell"
+  - `synonym`: STRING Example: '[]'
+
+- **experimental_factor**
+  - `id`: STRING Example: "efo_0008843" — EFO
+  - `term_name`: STRING Example: "PAL-seq"
+  - `description`: STRING Example: "Poly(A)-tail length profiling by sequencing"
+  - `synonym`: STRING Example: '[]'
+
+- **biological_process**
+  - `id`: STRING Example: "go_0007049" — GO biological process subontology
+  - `term_name`: STRING Example: "cell cycle"
+  - `synonym`: STRING Example: '["mitotic cell cycle"]'
+
+- **molecular_function**
+  - `id`: STRING Example: "go_0003677" — GO molecular function subontology
+  - `term_name`: STRING Example: "DNA binding"
+  - `synonym`: STRING Example: '["nucleic acid binding"]'
+
+- **cellular_component**
+  - `id`: STRING Example: "go_0005634" — GO cellular component subontology
+  - `term_name`: STRING Example: "nucleus"
+  - `synonym`: STRING Example: '["cell nucleus"]'
+
+- **disease**
+  - `id`: STRING Example: "omim_114480" — Disease Ontology / OMIM / ORPHA
+  - `term_name`: STRING Example: "Breast-ovarian cancer, familial, 1"
+  - `synonym`: STRING Example: '["BROVCA1", "BRCA1"]'
+
+- **phenotype**
+  - `id`: STRING Example: "hp_0001251" — HPO
+  - `term_name`: STRING Example: "Ataxia"
+  - `synonym`: STRING Example: '["Cerebellar ataxia"]'
+
+- **small_molecule**
+  - `id`: STRING Example: "chebi_15422" — ChEBI
+  - `term_name`: STRING Example: "ATP"
+  - `synonym`: STRING Example: '["adenosine 5-triphosphate", "adenosine triphosphate"]'
+
+- **molecular_interaction**
+  - `id`: STRING Example: "mi_0915"
+  - `term_name`: STRING Example: "physical association"
+  - `synonym`: STRING Example: '[]'
+
+- **developmental_stage**
+  - `id`: STRING Example: "hsadv_0000049"
+  - `term_name`: STRING Example: "newborn stage"
+  - `synonym`: STRING Example: '[]'
+
+- **sequence_type**
+  - `id`: STRING Example: "so_0000704"
+  - `term_name`: STRING Example: "gene"
+  - `synonym`: STRING Example: '[]'
+
+Note
+- Transcription factors have label `gene`
 - tfbs means transcription factor binding site
+- anatomy = UBERON anatomical structures; tissue = BRENDA Tissue Ontology (BTO)
+- cell_type = Cell Ontology (CL); cell_line = Cell Line Ontology (CLO)
+- experimental_factor = Experimental Factor Ontology (EFO)
+- biological_process / molecular_function / cellular_component = Gene Ontology (GO) by subontology
+- disease = Disease Ontology / OMIM / ORPHA; phenotype = Human Phenotype Ontology (HPO); small_molecule = ChEBI
 
 #### Relationships:
-(:gene)-[:expressed_in]->(:uberon)
-(:gene)-[:expressed_in]->(:efo)
-(:gene)-[:expressed_in]->(:clo)
-(:gene)-[:expressed_in]->(:cl)
-(:gene)-[:transcribed_to]->(:transcript)
-(:gene)-[:genes_pathways]->(:pathway)
+(:gene)-[:expressed_in]->(:anatomy)
+(:gene)-[:expressed_in]->(:tissue)
+(:gene)-[:expressed_in]->(:cell_type)
+(:gene)-[:expressed_in]->(:cell_line)
+(:gene)-[:expressed_in]->(:experimental_factor)
+(:gene)-[:transcribes_to]->(:transcript)
+(:gene)-[:participates_in]->(:pathway)
+(:gene)-[:involved_in]->(:reaction)
 (:gene)-[:in_tad_region]->(:tad)
-(:gene)-[:regulates]->(:gene) // This is transcription factor to gene association
-(:gene)-[:tfbs_snp]->(:snp)
+(:gene)-[:regulates]->(:gene)
 (:gene)-[:binds_to]->(:tfbs)
-(:transcript)-[:includes]->(:exon)
+(:gene)-[:involved_in]->(:biological_process)
+(:gene)-[:located_in]->(:cellular_component)
+(:gene)-[:part_of]->(:cellular_component)
+(:gene)-[:enables]->(:molecular_function)
+(:gene)-[:associated_with]->(:disease)
+(:gene)-[:involved_in]->(:phenotype)
+(:gene)-[:overlaps]->(:structural_variant)
+(:gene)-[:ortholog_of]->(:gene)
+(:gene)-[:coexpressed_with]->(:gene)
 (:transcript)-[:transcribed_from]->(:gene)
 (:transcript)-[:translates_to]->(:protein)
+(:transcript)-[:participates_in]->(:pathway)
+(:transcript)-[:involved_in]->(:reaction)
+(:exon)-[:part_of]->(:transcript)
+(:exon)-[:part_of]->(:gene)
+(:protein)-[:translation_of]->(:transcript)
+(:protein)-[:interacts_with]->(:protein)
+(:protein)-[:coexpressed_with]->(:protein)
+(:protein)-[:participates_in]->(:pathway)
+(:protein)-[:involved_in]->(:reaction)
+(:protein)-[:involved_in]->(:biological_process)
+(:protein)-[:located_in]->(:cellular_component)
+(:protein)-[:part_of]->(:cellular_component)
+(:protein)-[:enables]->(:molecular_function)
+(:protein)-[:regulates]->(:pathway)
+(:protein)-[:regulates]->(:reaction)
+(:protein)-[:negatively_regulates]->(:pathway)
+(:protein)-[:negatively_regulates]->(:reaction)
+(:protein)-[:positively_regulates]->(:pathway)
+(:protein)-[:positively_regulates]->(:reaction)
+(:protein)-[:produced_by]->(:pathway)
+(:protein)-[:produced_by]->(:reaction)
+(:protein)-[:has_xref]->(:gene)
+(:protein)-[:has_xref]->(:protein)
+(:protein)-[:has_xref]->(:transcript)
+(:protein)-[:has_xref]->(:small_molecule)
+(:protein)-[:has_xref]->(:biological_process)
+(:protein)-[:has_xref]->(:molecular_function)
+(:protein)-[:has_xref]->(:cellular_component)
 (:super_enhancer)-[:associated_with]->(:gene)
-(:clo)-[:subclass_of]->(:clo)
 (:enhancer)-[:associated_with]->(:gene)
-(:go)-[:subclass_of]->(:go)
-(:go)-[:go_gene_product]->(:protein)
+(:enhancer)-[:activity_by_contact]->(:gene)
+(:enhancer)-[:accessible_in]->(:cell_type)
+(:enhancer)-[:accessible_in]->(:anatomy)
+(:promoter)-[:associated_with]->(:gene)
+(:promoter)-[:accessible_in]->(:cell_type)
+(:promoter)-[:accessible_in]->(:anatomy)
+(:promoter)-[:overlaps]->(:structural_variant)
+(:regulatory_region)-[:regulates]->(:gene)
+(:cell_type)-[:capable_of]->(:biological_process)
+(:cell_type)-[:part_of]->(:anatomy)
+(:cell_type)-[:is_a]->(:cell_type)
+(:cell_type)-[:part_of]->(:tissue)
+(:cell_line)-[:is_a]->(:cell_line)
+(:cell_line)-[:is_a]->(:cell_type)
+(:anatomy)-[:is_a]->(:anatomy)
+(:tissue)-[:is_a]->(:tissue)
+(:tissue)-[:part_of]->(:anatomy)
+(:biological_process)-[:is_a]->(:biological_process)
+(:molecular_function)-[:is_a]->(:molecular_function)
+(:cellular_component)-[:is_a]->(:cellular_component)
+(:experimental_factor)-[:is_a]->(:experimental_factor)
+(:disease)-[:is_a]->(:disease)
+(:phenotype)-[:is_a]->(:phenotype)
+(:small_molecule)-[:is_a]->(:small_molecule)
+(:small_molecule)-[:part_of]->(:small_molecule)
+(:small_molecule)-[:participates_in]->(:pathway)
+(:small_molecule)-[:participates_in]->(:reaction)
 (:pathway)-[:child_pathway_of]->(:pathway)
 (:pathway)-[:parent_pathway_of]->(:pathway)
-(:uberon)-[:subclass_of]->(:uberon)
-(:bto)-[:subclass_of]->(:bto)
-(:cl)-[:part_of]->(:uberon)
-(:cl)-[:subclass_of]->(:cl)
-(:cl)-[:capable_of]->(:go)
-(:promoter)-[:associated_with]->(:gene)
-(:protein)-[:interacts_with]->(:protein)
-(:protein)-[:translation_of]->(:transcript)
+(:pathway)-[:equivalent_to]->(:biological_process)
+(:reaction)-[:part_of]->(:pathway)
+(:non_coding_rna)-[:participates_in]->(:biological_process)
+(:non_coding_rna)-[:enables]->(:molecular_function)
+(:non_coding_rna)-[:located_in]->(:cellular_component)
+(:non_coding_rna)-[:overlaps]->(:structural_variant)
 (:snp)-[:closest_gene]->(:gene)
-(:snp)-[:located_in]->(:gene)
 (:snp)-[:eqtl_association]->(:gene)
+(:snp)-[:upstream_of]->(:gene)
+(:snp)-[:downstream_of]->(:gene)
+(:snp)-[:located_in]->(:gene)
 (:snp)-[:activity_by_contact]->(:gene)
-(:snp)-[:chromatin_state]->(:uberon)
-(:snp)-[:chromatin_state]->(:efo)
-(:snp)-[:chromatin_state]->(:clo)
-(:snp)-[:chromatin_state]->(:cl)
-(:snp)-[:histone_modification]->(:uberon)
-(:snp)-[:histone_modification]->(:clo)
-(:snp)-[:histone_modification]->(:cl)
-(:efo)-[:subclass_of]->(:efo)
-(:non_coding_rna)-[:belongs_to]->(:go)
+(:snp)-[:chromatin_state]->(:anatomy)
+(:snp)-[:chromatin_state]->(:tissue)
+(:snp)-[:chromatin_state]->(:cell_type)
+(:snp)-[:chromatin_state]->(:cell_line)
+(:snp)-[:chromatin_state]->(:experimental_factor)
+(:snp)-[:in_dnase_I_hotspot]->(:anatomy)
+(:snp)-[:in_dnase_I_hotspot]->(:cell_type)
+(:snp)-[:in_dnase_I_hotspot]->(:cell_line)
+(:snp)-[:in_dnase_I_hotspot]->(:experimental_factor)
+(:snp)-[:in_dnase_I_hotspot]->(:tissue)
+(:snp)-[:histone_modification]->(:anatomy)
+(:snp)-[:histone_modification]->(:cell_type)
+(:snp)-[:histone_modification]->(:cell_line)
+(:snp)-[:histone_modification]->(:experimental_factor)
+(:snp)-[:histone_modification]->(:tissue)
+(:snp)-[:in_linkage_disequilibrium_with]->(:snp)
+(:snp)-[:alters_binding]->(:motif)
+(:structural_variant)-[:overlaps]->(:gene)
+(:structural_variant)-[:overlaps]->(:non_coding_rna)
+(:structural_variant)-[:overlaps]->(:promoter)
+
+#### Important Rules:
+1. **Database ID vs Property Value:**
+   - `id` field: ONLY use for actual database identifiers (lowercase, like "ensg00000290825")
+   - `properties`: Use for searchable values (gene names, transcript IDs, ontology term names)
+
+2. **When to Use Each:**
+   - Query by database ID: Put the ID in `id` field, leave `properties` empty
+   - Query by name/identifier: Put the value in `properties`, leave `id` empty
+
+3. **Examples:**
+   - "Find gene BRCA1" → `properties: {"gene_name": "BRCA1"}`, `id: ""`
+   - "Find gene with ID ensg00000012048" → `id: "ensg00000012048"`, `properties: {}`
+   - "Find transcript ENST00000357654" → `properties: {"transcript_id": "ENST00000357654"}`, `id: ""`
+   - "Find SNP rs201221815" → `id: "rs201221815"`, `properties: {}`
+   - "Find disease BRCA1" → `properties: {"term_name": "Breast-ovarian cancer"}`, `id: ""`
+
+4. **Key Schema Changes from previous version:**
+   - `transcribed_to` is now `transcribes_to`
+   - `includes` (transcript→exon) is now `part_of` (exon→transcript, direction reversed)
+   - `uberon` is now `anatomy`; `bto` is now `tissue`
+   - `cl` is now `cell_type`; `clo` is now `cell_line`; `efo` is now `experimental_factor`
+   - `go` is now split into `biological_process`, `molecular_function`, `cellular_component`
+   - New nodes: `disease`, `phenotype`, `reaction`, `small_molecule`
