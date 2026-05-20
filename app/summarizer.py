@@ -246,7 +246,7 @@ class Graph_Summarizer:
             logger.info("Querying the graph without user question...")
             http_response = requests.get(
                 f"{self.kg_service_url}/annotation/{graph_id}",
-                headers={"Authorization": token},
+                headers={"Authorization": f"Bearer {token}"},
             )
             http_response.raise_for_status()
 
