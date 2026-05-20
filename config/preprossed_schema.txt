@@ -2,69 +2,158 @@
 
 #### Nodes:
 Node properties:
-gene {gene_type: STRING, gene_name: STRING, id: STRING, chr: STRING, start: STRING, end: STRING, synonyms: STRING}
-transcript {transcript_type: STRING, transcript_name: STRING, transcript_id: STRING, chr: STRING, gene_name: STRING, end: STRING, id: STRING, start: STRING}
-exon {gene_id: STRING, exon_id: STRING, transcript_id: STRING, end: STRING, chr: STRING, exon_number: STRING, id: STRING, start: STRING}
-super_enhancer {end: STRING, se_id: STRING, start: STRING, id: STRING, chr: STRING}
-clo {term_name: STRING, id: STRING, synonyms: STRING}
-enhancer {start: STRING, end: STRING, id: STRING, chr: STRING, data_source: STRING, enhancer_id: STRING}
-go {id: STRING, synonyms: STRING, term_name: STRING, subontology: STRING}
-pathway {pathway_name: STRING, id: STRING}
-tfbs {end: STRING, id: STRING, chr: STRING, start: STRING}
-uberon {synonyms: STRING, term_name: STRING, id: STRING} // Mostly tissue informaiton
-bto {synonyms: STRING, term_name: STRING, id: STRING}
-cl {term_name: STRING, id: STRING, synonyms: STRING}
-promoter {start: STRING, end: STRING, id: STRING, chr: STRING}
-protein {id: STRING, synonyms: STRING, accessions: STRING, protein_name: STRING}
-snp {raw_cadd_score: STRING, phred_score: STRING, end: STRING, chr: STRING, id: STRING, start: STRING, ref: STRING, caf_ref: STRING, alt: STRING, caf_alt: STRING}
-efo {term_name: STRING, synonyms: STRING, id: STRING, description: STRING}
-non_coding_rna {start: STRING, end: STRING, rna_type: STRING, id: STRING, chr: STRING}
-tad {end: STRING, id: STRING, chr: STRING, genes: STRING, start: STRING}
-structural_variant {start: STRING, end: STRING, id: STRING, evidence: STRING, variant_accession: STRING, variant_type: STRING, chr: STRING}
+gene {id: STRING, gene_name: STRING, gene_type: STRING, synonym: STRING, chr: STRING, start: INTEGER, end: INTEGER, source: STRING, source_url: STRING}
+transcript {id: STRING, transcript_id: STRING, transcript_name: STRING, transcript_type: STRING, chr: STRING, start: INTEGER, end: INTEGER, gene_name: STRING}
+exon {id: STRING, exon_id: STRING, exon_number: INTEGER, chr: STRING, start: INTEGER, end: INTEGER, transcript_id: STRING, gene_id: STRING}
+protein {id: STRING, protein_name: STRING, accessions: STRING, is_canonical: BOOLEAN, is_isoform: BOOLEAN, canonical_accession: STRING, isoform_name: STRING, source: STRING}
+promoter {id: STRING, chr: STRING, start: INTEGER, end: INTEGER, development_stage: STRING, ccre_module: INTEGER, taxon_id: STRING}
+enhancer {id: STRING, chr: STRING, start: INTEGER, end: INTEGER, data_source: STRING, enhancer_id: STRING, development_stage: STRING, ccre_module: INTEGER, taxon_id: STRING}
+super_enhancer {id: STRING, chr: STRING, start: INTEGER, end: INTEGER, se_id: STRING}
+non_coding_rna {id: STRING, chr: STRING, start: INTEGER, end: INTEGER, rna_type: STRING}
+regulatory_region {id: STRING, chr: STRING, start: INTEGER, end: INTEGER, cell: STRING, biochemical_activity: STRING, biological_context: STRING}
+snp {id: STRING, chr: STRING, start: INTEGER, end: INTEGER, ref: STRING, alt: STRING, caf_ref: STRING, caf_alt: STRING, raw_cadd_score: FLOAT, phred_score: FLOAT, polyphen2_humdiv_score: FLOAT, polyphen2_humdiv_prediction: STRING, polyphen2_humvar_score: FLOAT, polyphen2_humvar_prediction: STRING}
+structural_variant {id: STRING, chr: STRING, start: INTEGER, end: INTEGER, variant_accession: STRING, variant_type: STRING, evidence: STRING}
+sequence_variant {id: STRING, chr: STRING, start: INTEGER, end: INTEGER, rsid: STRING, ref: STRING, alt: STRING, raw_cadd_score: FLOAT, phred_score: FLOAT}
+pathway {id: STRING, pathway_name: STRING, pathway_url: STRING, evidence: STRING, source: STRING}
+reaction {id: STRING, reaction_name: STRING, reaction_url: STRING, evidence: STRING, source: STRING}
+tad {id: STRING, chr: STRING, start: INTEGER, end: INTEGER}
+motif {id: STRING, tf_name: STRING, length: INTEGER, source: STRING}
+tfbs {id: STRING, chr: STRING, start: INTEGER, end: INTEGER}
+chromosome_chain {id: STRING, chr: STRING, chain_id: STRING, next_start: INTEGER, resolution: STRING}
+chromosome {id: STRING, chr: STRING, chromosome_id: STRING}
+anatomy {id: STRING, term_name: STRING, synonym: STRING, description: STRING}  // UBERON anatomical structures
+tissue {id: STRING, term_name: STRING, synonym: STRING}  // BRENDA Tissue Ontology (BTO)
+cell_type {id: STRING, term_name: STRING, synonym: STRING}  // Cell Ontology (CL)
+cell_line {id: STRING, term_name: STRING, synonym: STRING}  // Cell Line Ontology (CLO)
+experimental_factor {id: STRING, term_name: STRING, synonym: STRING, description: STRING}  // EFO
+biological_process {id: STRING, term_name: STRING, synonym: STRING}  // GO biological process
+molecular_function {id: STRING, term_name: STRING, synonym: STRING}  // GO molecular function
+cellular_component {id: STRING, term_name: STRING, synonym: STRING}  // GO cellular component
+disease {id: STRING, term_name: STRING, synonym: STRING}  // Disease Ontology / OMIM / ORPHA
+phenotype {id: STRING, term_name: STRING, synonym: STRING}  // Human Phenotype Ontology (HPO)
+small_molecule {id: STRING, term_name: STRING, synonym: STRING}  // ChEBI
+molecular_interaction {id: STRING, term_name: STRING, synonym: STRING}
+developmental_stage {id: STRING, term_name: STRING, synonym: STRING}
+sequence_type {id: STRING, term_name: STRING, synonym: STRING}
 
-Note 
-- transcription factor have label `gene`
+Note
+- Transcription factors have label `gene`
 - tfbs means transcription factor binding site
+- anatomy = UBERON; tissue = BTO; cell_type = CL; cell_line = CLO; experimental_factor = EFO
+- biological_process / molecular_function / cellular_component = GO (by subontology)
+- disease = Disease Ontology/OMIM/ORPHA; phenotype = HPO; small_molecule = ChEBI
 
 #### Relationships:
-(:gene)-[:expressed_in]->(:uberon)
-(:gene)-[:expressed_in]->(:efo)
-(:gene)-[:expressed_in]->(:clo)
-(:gene)-[:expressed_in]->(:cl)
-(:gene)-[:transcribed_to]->(:transcript)
-(:gene)-[:genes_pathways]->(:pathway)
+(:gene)-[:expressed_in]->(:anatomy)
+(:gene)-[:expressed_in]->(:tissue)
+(:gene)-[:expressed_in]->(:cell_type)
+(:gene)-[:expressed_in]->(:cell_line)
+(:gene)-[:expressed_in]->(:experimental_factor)
+(:gene)-[:transcribes_to]->(:transcript)
+(:gene)-[:participates_in]->(:pathway)
+(:gene)-[:involved_in]->(:reaction)
 (:gene)-[:in_tad_region]->(:tad)
-(:gene)-[:regulates]->(:gene) // This is transcription factor to gene association
-(:gene)-[:tfbs_snp]->(:snp)
+(:gene)-[:regulates]->(:gene)
 (:gene)-[:binds_to]->(:tfbs)
-(:transcript)-[:includes]->(:exon)
+(:gene)-[:involved_in]->(:biological_process)
+(:gene)-[:located_in]->(:cellular_component)
+(:gene)-[:part_of]->(:cellular_component)
+(:gene)-[:enables]->(:molecular_function)
+(:gene)-[:associated_with]->(:disease)
+(:gene)-[:involved_in]->(:phenotype)
+(:gene)-[:overlaps]->(:structural_variant)
+(:gene)-[:ortholog_of]->(:gene)
+(:gene)-[:coexpressed_with]->(:gene)
 (:transcript)-[:transcribed_from]->(:gene)
 (:transcript)-[:translates_to]->(:protein)
+(:transcript)-[:participates_in]->(:pathway)
+(:transcript)-[:involved_in]->(:reaction)
+(:exon)-[:part_of]->(:transcript)
+(:exon)-[:part_of]->(:gene)
+(:protein)-[:translation_of]->(:transcript)
+(:protein)-[:interacts_with]->(:protein)
+(:protein)-[:coexpressed_with]->(:protein)
+(:protein)-[:participates_in]->(:pathway)
+(:protein)-[:involved_in]->(:reaction)
+(:protein)-[:involved_in]->(:biological_process)
+(:protein)-[:located_in]->(:cellular_component)
+(:protein)-[:part_of]->(:cellular_component)
+(:protein)-[:enables]->(:molecular_function)
+(:protein)-[:regulates]->(:pathway)
+(:protein)-[:regulates]->(:reaction)
+(:protein)-[:negatively_regulates]->(:pathway)
+(:protein)-[:negatively_regulates]->(:reaction)
+(:protein)-[:positively_regulates]->(:pathway)
+(:protein)-[:positively_regulates]->(:reaction)
+(:protein)-[:produced_by]->(:pathway)
+(:protein)-[:produced_by]->(:reaction)
+(:protein)-[:has_xref]->(:gene)
+(:protein)-[:has_xref]->(:protein)
+(:protein)-[:has_xref]->(:transcript)
+(:protein)-[:has_xref]->(:small_molecule)
+(:protein)-[:has_xref]->(:biological_process)
+(:protein)-[:has_xref]->(:molecular_function)
+(:protein)-[:has_xref]->(:cellular_component)
 (:super_enhancer)-[:associated_with]->(:gene)
-(:clo)-[:subclass_of]->(:clo)
 (:enhancer)-[:associated_with]->(:gene)
-(:go)-[:subclass_of]->(:go)
-(:go)-[:go_gene_product]->(:protein)
+(:enhancer)-[:activity_by_contact]->(:gene)
+(:enhancer)-[:accessible_in]->(:cell_type)
+(:enhancer)-[:accessible_in]->(:anatomy)
+(:promoter)-[:associated_with]->(:gene)
+(:promoter)-[:accessible_in]->(:cell_type)
+(:promoter)-[:accessible_in]->(:anatomy)
+(:promoter)-[:overlaps]->(:structural_variant)
+(:regulatory_region)-[:regulates]->(:gene)
+(:cell_type)-[:capable_of]->(:biological_process)
+(:cell_type)-[:part_of]->(:anatomy)
+(:cell_type)-[:is_a]->(:cell_type)
+(:cell_type)-[:part_of]->(:tissue)
+(:cell_line)-[:is_a]->(:cell_line)
+(:cell_line)-[:is_a]->(:cell_type)
+(:anatomy)-[:is_a]->(:anatomy)
+(:tissue)-[:is_a]->(:tissue)
+(:tissue)-[:part_of]->(:anatomy)
+(:biological_process)-[:is_a]->(:biological_process)
+(:molecular_function)-[:is_a]->(:molecular_function)
+(:cellular_component)-[:is_a]->(:cellular_component)
+(:experimental_factor)-[:is_a]->(:experimental_factor)
+(:disease)-[:is_a]->(:disease)
+(:phenotype)-[:is_a]->(:phenotype)
+(:small_molecule)-[:is_a]->(:small_molecule)
+(:small_molecule)-[:part_of]->(:small_molecule)
+(:small_molecule)-[:participates_in]->(:pathway)
+(:small_molecule)-[:participates_in]->(:reaction)
 (:pathway)-[:child_pathway_of]->(:pathway)
 (:pathway)-[:parent_pathway_of]->(:pathway)
-(:uberon)-[:subclass_of]->(:uberon)
-(:bto)-[:subclass_of]->(:bto)
-(:cl)-[:part_of]->(:uberon)
-(:cl)-[:subclass_of]->(:cl)
-(:cl)-[:capable_of]->(:go)
-(:promoter)-[:associated_with]->(:gene)
-(:protein)-[:interacts_with]->(:protein)
-(:protein)-[:translation_of]->(:transcript)
-(:snp)-[:located_in]->(:gene)
+(:pathway)-[:equivalent_to]->(:biological_process)
+(:reaction)-[:part_of]->(:pathway)
+(:non_coding_rna)-[:participates_in]->(:biological_process)
+(:non_coding_rna)-[:enables]->(:molecular_function)
+(:non_coding_rna)-[:located_in]->(:cellular_component)
+(:non_coding_rna)-[:overlaps]->(:structural_variant)
 (:snp)-[:closest_gene]->(:gene)
 (:snp)-[:eqtl_association]->(:gene)
+(:snp)-[:upstream_of]->(:gene)
+(:snp)-[:downstream_of]->(:gene)
+(:snp)-[:located_in]->(:gene)
 (:snp)-[:activity_by_contact]->(:gene)
-(:snp)-[:chromatin_state]->(:uberon)
-(:snp)-[:chromatin_state]->(:efo)
-(:snp)-[:chromatin_state]->(:clo)
-(:snp)-[:chromatin_state]->(:cl)
-(:snp)-[:histone_modification]->(:uberon)
-(:snp)-[:histone_modification]->(:clo)
-(:snp)-[:histone_modification]->(:cl)
-(:efo)-[:subclass_of]->(:efo)
-(:non_coding_rna)-[:belongs_to]->(:go)
+(:snp)-[:chromatin_state]->(:anatomy)
+(:snp)-[:chromatin_state]->(:tissue)
+(:snp)-[:chromatin_state]->(:cell_type)
+(:snp)-[:chromatin_state]->(:cell_line)
+(:snp)-[:chromatin_state]->(:experimental_factor)
+(:snp)-[:in_dnase_I_hotspot]->(:anatomy)
+(:snp)-[:in_dnase_I_hotspot]->(:cell_type)
+(:snp)-[:in_dnase_I_hotspot]->(:cell_line)
+(:snp)-[:in_dnase_I_hotspot]->(:experimental_factor)
+(:snp)-[:in_dnase_I_hotspot]->(:tissue)
+(:snp)-[:histone_modification]->(:anatomy)
+(:snp)-[:histone_modification]->(:cell_type)
+(:snp)-[:histone_modification]->(:cell_line)
+(:snp)-[:histone_modification]->(:experimental_factor)
+(:snp)-[:histone_modification]->(:tissue)
+(:snp)-[:in_linkage_disequilibrium_with]->(:snp)
+(:snp)-[:alters_binding]->(:motif)
+(:structural_variant)-[:overlaps]->(:gene)
+(:structural_variant)-[:overlaps]->(:non_coding_rna)
+(:structural_variant)-[:overlaps]->(:promoter)

@@ -424,7 +424,7 @@ class Graph:
                 # Check if this was a path query that should have returned relationships
                 is_path_query = any(
                     rel in cypher_query.lower()
-                    for rel in ["transcribed_to", "includes", "transcribed_from"]
+                    for rel in ["transcribes_to", "part_of", "transcribed_from", "translates_to"]
                 )
                 if is_path_query and counts["total_relationships"] == 0:
                     # this indicates an invalid query or missing data
