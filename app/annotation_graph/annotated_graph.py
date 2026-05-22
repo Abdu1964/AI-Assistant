@@ -244,8 +244,15 @@ class Graph:
                                 selected_property = self._select_best_matching_property_value(
                                     item, similar_values
                                 )
-                                if selected_property.get("selected_value"):
-                                    validated_items.append(selected_property["selected_value"])
+                                selected = selected_property.get("selected_value")
+                                if selected:
+                                    if selected.lower() == item.lower():
+                                        # Same name, just canonicalize case — auto-accept
+                                        validated_items.append(selected)
+                                    else:
+                                        # Different name — ask the user first
+                                        failed_items.append(item)
+                                        item_suggestions[item] = selected
                                 else:
                                     failed_items.append(item)
                                     top = similar_values[0][0]
@@ -253,12 +260,26 @@ class Graph:
                                         item_suggestions[item] = top
                             else:
                                 failed_items.append(item)
-                        properties[property_key] = ", ".join(validated_items + failed_items)
+
+                        # Items with suggestions → ask user; truly missing (no suggestion) → keep as-is
+                        confirmable = {
+                            item: item_suggestions[item]
+                            for item in failed_items
+                            if item in item_suggestions
+                        }
+                        truly_missing = [item for item in failed_items if item not in item_suggestions]
+
+                        # Only include validated + truly-missing items in the property for now
+                        properties[property_key] = ", ".join(validated_items + truly_missing)
+
                         if failed_items:
                             node["status"] = False
-                            node["not_validated"] = failed_items
-                            if item_suggestions:
-                                node["suggestions"] = item_suggestions
+                            if confirmable:
+                                node["needs_confirmation"] = True
+                                node["pending_substitutions"] = confirmable
+                                node["all_list_values"] = list(items)
+                            if truly_missing:
+                                node["not_validated"] = truly_missing
                             validation_report["failed_nodes"].append(
                                 {"node_id": node_id, "reason": f"Could not find in database: {failed_items}"}
                             )
@@ -277,26 +298,30 @@ class Graph:
 
                             if selected_property.get("selected_value"):
                                 new_value = selected_property.get("selected_value")
-                                if new_value != property_value:
-                                    validation_report["property_changes"].append(
+                                if new_value.lower() == property_value.lower():
+                                    # Same name, just canonicalize case — auto-accept
+                                    properties[property_key] = new_value
+                                else:
+                                    # Different value — ask for confirmation before substituting
+                                    node["status"] = False
+                                    node["needs_confirmation"] = True
+                                    node["pending_substitutions"] = {property_value: new_value}
+                                    validation_report["failed_nodes"].append(
                                         {
-                                            "node_type": node_type,
                                             "node_id": node_id,
-                                            "property": property_key,
-                                            "original_value": property_value,
-                                            "new_value": new_value,
-                                            "similar_values": similar_values,
+                                            "reason": f"'{property_value}' not found exactly; nearest match is '{new_value}'",
                                         }
                                     )
-                                properties[property_key] = new_value
                             else:
                                 node["status"] = False
-                                node["validation_error"] = f"No suitable match found for '{property_value}' in the database."
                                 top = similar_values[0][0]
                                 if top.lower() != property_value.lower():
-                                    node["suggestion"] = top
+                                    node["needs_confirmation"] = True
+                                    node["pending_substitutions"] = {property_value: top}
+                                else:
+                                    node["validation_error"] = f"No suitable match found for '{property_value}'."
                                 validation_report["failed_nodes"].append(
-                                    {"node_id": node_id, "reason": node["validation_error"]}
+                                    {"node_id": node_id, "reason": f"'{property_value}' not found in the database."}
                                 )
                         else:
                             node["status"] = False
@@ -644,6 +669,32 @@ class Graph:
                 validation = self._validate_and_update(initial_json)
                 logger.info("JSON validation successful")
 
+                # Collect nodes that need user confirmation before the JSON can be finalised
+                unconfirmed_nodes = []
+                for node in validation["updated_json"].get("nodes", []):
+                    if node.get("needs_confirmation") and node.get("pending_substitutions"):
+                        for original, suggestion in node["pending_substitutions"].items():
+                            unconfirmed_nodes.append({
+                                "node_id": node.get("node_id"),
+                                "node_type": node.get("type"),
+                                "original": original,
+                                "suggestion": suggestion,
+                                "all_list_values": node.get("all_list_values", []),
+                            })
+
+                if unconfirmed_nodes:
+                    logger.info(f"Returning needs_confirmation for {len(unconfirmed_nodes)} node(s)")
+                    return {
+                        "success": True,
+                        "needs_confirmation": True,
+                        "pending_json": validation["updated_json"],
+                        "unconfirmed_nodes": unconfirmed_nodes,
+                        "summary": None,
+                        "json_format": None,
+                        "validation_report": validation["validation_report"],
+                        "resource": {"id": None, "type": "annotation"},
+                    }
+
                 json_query = {
                     "success": True,
                     "summary": None,
@@ -654,7 +705,7 @@ class Graph:
 
                 logger.info("JSON query extraction successful")
                 logger.info(f"JSON query structure: {json.dumps(json_query, indent=2)}")
-                
+
                 return json_query
             
             except Exception as e:
