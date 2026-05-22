@@ -328,9 +328,23 @@ class AiAssistance:
                 user_id=state["user_id"],
                 query_type=query_type,
             )
-            
+
             logger.info(f"Pipeline response: {pipeline_response}")
-            
+
+            if pipeline_response.get("needs_confirmation"):
+                return {
+                    "annotation_response": {
+                        "text": None,
+                        "json_format": None,
+                        "needs_confirmation": True,
+                        "pending_json": pipeline_response["pending_json"],
+                        "unconfirmed_nodes": pipeline_response["unconfirmed_nodes"],
+                        "source": "annotation database",
+                    },
+                    "agents_completed": ["annotation_agent"],
+                    "messages": [AIMessage(content="Annotation needs user confirmation")],
+                }
+
             if pipeline_response.get("success", False):
                 summary = pipeline_response.get("summary", "")
                 json_format = pipeline_response.get("json_format", None)
@@ -616,6 +630,125 @@ class AiAssistance:
                 "error": str(e)
             }
 
+    def _build_confirmation_text(self, unconfirmed_nodes: list, pending_json: dict) -> str:
+        """Build a conversational 'did you mean?' message for unconfirmed node substitutions."""
+        if len(unconfirmed_nodes) == 1:
+            u = unconfirmed_nodes[0]
+            all_vals = u.get("all_list_values") or [u["original"]]
+            known_vals = [v for v in all_vals if v != u["original"]]
+            all_vals_str = ", ".join(all_vals)
+            known_str = ", ".join(known_vals)
+            return (
+                f"I was putting your annotation together but hit a small snag — "
+                f"from the listed nodes [{all_vals_str}], I couldn't find **'{u['original']}'** in the database. "
+                f"The closest match I found is **'{u['suggestion']}'**.\n\n"
+                f"Should I go ahead and use **'{u['suggestion']}'** in place of **'{u['original']}'**? "
+                f"Or would you like me to build the annotation without it, using only [{known_str}]?"
+            )
+        lines = [
+            "I was working on your annotation but ran into a few issues — "
+            "I couldn't find some of the nodes you mentioned in the database:"
+        ]
+        for u in unconfirmed_nodes:
+            all_vals = u.get("all_list_values") or [u["original"]]
+            lines.append(
+                f"  - **'{u['original']}'** (from [{', '.join(all_vals)}]) — "
+                f"closest match is **'{u['suggestion']}'**"
+            )
+        lines.append(
+            "\nShould I go ahead with these substitutions? "
+            "Or would you prefer I build the annotation skipping the unrecognised nodes?"
+        )
+        return "\n".join(lines)
+
+    def _is_confirming(self, message: str) -> bool:
+        """Return True if the user message is an affirmative confirmation."""
+        msg = message.strip().lower().rstrip(".")
+        affirmatives = {
+            "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "correct",
+            "go ahead", "proceed", "use it", "use that", "sounds good",
+            "that's right", "right", "confirm", "confirmed", "yes please",
+            "yes go ahead", "yes proceed", "do it",
+        }
+        if msg in affirmatives:
+            return True
+        return any(msg.startswith(a) for a in affirmatives)
+
+    def _is_rejecting(self, message: str) -> bool:
+        """Return True if the user wants to build the annotation without the unidentified node."""
+        msg = message.strip().lower()
+        skip_phrases = [
+            "without", "skip", "exclude", "don't use", "dont use",
+            "no ", "nope", "not", "ignore", "leave it out", "drop it",
+            "build without", "just use", "only use",
+        ]
+        return any(phrase in msg for phrase in skip_phrases)
+
+    def _apply_pending_substitutions(self, pending_json: dict, apply: bool = True) -> dict:
+        """
+        Finalise the draft JSON.
+        apply=True  → substitute the suggested values in place of the originals.
+        apply=False → keep the property as-is (unidentified nodes simply absent) and clean up markers.
+        """
+        import copy
+        result = copy.deepcopy(pending_json)
+        for node in result.get("nodes", []):
+            if not (node.get("needs_confirmation") and node.get("pending_substitutions")):
+                continue
+            if apply:
+                pending_subs = node["pending_substitutions"]
+                for prop_key, prop_val in node.get("properties", {}).items():
+                    if not isinstance(prop_val, str):
+                        continue
+                    parts = [p.strip() for p in prop_val.split(",") if p.strip()]
+                    replaced = set()
+                    new_parts = []
+                    for part in parts:
+                        replacement = next(
+                            (sugg for orig, sugg in pending_subs.items() if part.lower() == orig.lower()),
+                            None,
+                        )
+                        if replacement:
+                            new_parts.append(replacement)
+                            replaced.add(part.lower())
+                        else:
+                            new_parts.append(part)
+                    # Append suggestions for originals absent from the property string (is_list case)
+                    for orig, sugg in pending_subs.items():
+                        if orig.lower() not in replaced:
+                            new_parts.append(sugg)
+                    node["properties"][prop_key] = ", ".join(new_parts)
+            node["status"] = True
+            for key in ("needs_confirmation", "pending_substitutions", "all_list_values",
+                        "not_validated", "suggestions", "validation_error", "suggestion"):
+                node.pop(key, None)
+        return result
+
+    def _build_annotation_text(self, json_format: dict) -> str:
+        """Build human-readable text from annotation validation results for truly-failed nodes."""
+        nodes = json_format.get("nodes", [])
+        # Ignore nodes pending confirmation — those are handled by _build_confirmation_text
+        failed = [n for n in nodes if n.get("status") is False and not n.get("needs_confirmation")]
+        text = "The annotation structure was created successfully (see structured data)."
+
+        if failed:
+            missing_parts = []
+            for n in failed:
+                not_validated = n.get("not_validated")
+                if not_validated:
+                    items = not_validated if isinstance(not_validated, list) else [not_validated]
+                    for item in items:
+                        missing_parts.append(f'"{item}"')
+                else:
+                    props = n.get("properties", {})
+                    name = next(iter(props.values()), n.get("type", "unknown"))
+                    missing_parts.append(f'"{name}"')
+            verb = "was" if len(missing_parts) == 1 else "were"
+            joined = ", ".join(missing_parts)
+            text += f" Note: {joined} {verb} not found in the database."
+
+        return text
+
     def _aggregate_responses(self, state: AgentState) -> Dict[str, Any]:
         """
         Aggregate responses from all agents with source attribution.
@@ -632,10 +765,31 @@ class AiAssistance:
         # ---------------- Annotation Agent ----------------
         annotation_resp = state.get("annotation_response")
         if annotation_resp:
+            if annotation_resp.get("needs_confirmation"):
+                confirmation_text = self._build_confirmation_text(
+                    annotation_resp["unconfirmed_nodes"],
+                    annotation_resp["pending_json"],
+                )
+                return {
+                    "response": {
+                        "text": confirmation_text,
+                        "json_format": None,
+                        "needs_confirmation": True,
+                        "pending_json": annotation_resp["pending_json"],
+                        "unconfirmed_nodes": annotation_resp["unconfirmed_nodes"],
+                    }
+                }
+
             # Use text or summary if available
             text_content = annotation_resp.get("text") or annotation_resp.get("summary") or ""
             json_format = annotation_resp.get("json_format")
             validation_report = annotation_resp.get("validation_report", {})
+
+            # When the pipeline returns json_format but no text (e.g. Cypher execution
+            # commented out), build the validation/substitution text from the json_format
+            # so it always reaches the user regardless of what other agents returned.
+            if not text_content and json_format:
+                text_content = self._build_annotation_text(json_format)
 
             if text_content:
                 agent_outputs.append({
@@ -719,66 +873,9 @@ class AiAssistance:
             logger.info(f"[note-check] node statuses: { {n.get('node_id'): n.get('status') for n in nodes} }")
             failed = [n for n in nodes if n.get("status") is False]
             logger.info(f"[note-check] failed nodes: {[n.get('node_id') for n in failed]}")
-
-            substituted = []
-            for n in nodes:
-                if n.get("status") is False and n.get("suggestion") and not n.get("not_validated"):
-                    props = n.get("properties", {})
-                    suggestion = n.pop("suggestion")
-                    for key in props:
-                        substituted.append((props[key], suggestion))
-                        props[key] = suggestion
-                        break
-                    n["status"] = True
-                    n.pop("validation_error", None)
-
-            failed = [n for n in nodes if n.get("status") is False]
-
-            text = "The annotation structure was created successfully (see structured data)."
-
-            # Single-node substitution: the queried value didn't exist, closest match was used
-            if substituted:
-                if len(substituted) == 1:
-                    orig, sub = substituted[0]
-                    text += f' Note: "{orig}" was not found in the database. The structure was created for the closest match "{sub}" instead — did you mean "{sub}"?'
-                else:
-                    pairs = ", ".join(f'"{o}" → "{s}"' for o, s in substituted)
-                    text += f" Note: The following were not found and substituted with the closest match: {pairs}."
-
-            # Failed nodes: not found and no suitable match (list nodes or truly missing)
-            if failed:
-                missing_parts = []
-                all_suggestions = []  # list of (original, suggestion) tuples
-                for n in failed:
-                    not_validated = n.get("not_validated")
-                    suggestions = n.get("suggestions", {})
-                    if not_validated:
-                        items = not_validated if isinstance(not_validated, list) else [not_validated]
-                        for item in items:
-                            missing_parts.append(f'"{item}"')
-                            suggestion = suggestions.get(item)
-                            if suggestion:
-                                all_suggestions.append((item, suggestion))
-                    else:
-                        props = n.get("properties", {})
-                        name = next(iter(props.values()), n.get("type", "unknown"))
-                        missing_parts.append(f'"{name}"')
-                        suggestion = n.get("suggestion")
-                        if suggestion:
-                            all_suggestions.append((name, suggestion))
-                verb = "was" if len(missing_parts) == 1 else "were"
-                joined = ", ".join(missing_parts)
-                text += f" Note: {joined} {verb} not found in the database but {verb} included in the structure based on the provided information."
-                if all_suggestions:
-                    if len(all_suggestions) == 1:
-                        text += f" Did you mean \"{all_suggestions[0][1]}\"?"
-                    else:
-                        did_you_mean = ", ".join(f'"{orig}" → "{sugg}"' for orig, sugg in all_suggestions)
-                        text += f" Did you mean: {did_you_mean}?"
-
             return {
                 "response": {
-                    "text": text,
+                    "text": self._build_annotation_text(json_format),
                     "json_format": json_format
                 }
             }
@@ -866,9 +963,10 @@ class AiAssistance:
         if state.get("resource"):
             response["resource"] = state.get("resource")
 
-        # Emit final response
-        emit_to_user(user=user_id, message=response, status="completed")
-        
+        # Strip internal fields that should never reach the frontend
+        emit_payload = {k: v for k, v in response.items() if k not in ("pending_json", "unconfirmed_nodes")}
+        emit_to_user(user=user_id, message=emit_payload, status="completed")
+
         return {"response": response}
 
     def agent(
@@ -961,7 +1059,54 @@ class AiAssistance:
                 f"Assistant response called with query={query}, user_id={user_id}, "
                 f"graph_id={graph_id}, content_ids={content_ids}, urls={urls}"
             )
-            
+
+            # Check if this message is a reply to a pending annotation confirmation
+            try:
+                latest_pending = self.store.get_latest_pending_json(user_id)
+                if latest_pending:
+                    draft_json = latest_pending.get("pending_json")
+                    substitutions = latest_pending.get("substitutions", [])
+                    apply = None
+                    if self._is_confirming(query):
+                        apply = True
+                    elif self._is_rejecting(query):
+                        apply = False
+                    if apply is not None and draft_json:
+                        final_json = self._apply_pending_substitutions(draft_json, apply=apply)
+                        if apply and substitutions:
+                            subs_display = ", ".join(f"'{o}' → '{s}'" for o, s in substitutions)
+                            response_text = (
+                                f"Great, got it! I've put together the annotation "
+                                f"using {subs_display}. Here's the result for you."
+                            )
+                        elif apply:
+                            response_text = "Got it! Here's your annotation."
+                        else:
+                            skipped = ", ".join(f"'{o}'" for o, _ in substitutions)
+                            response_text = (
+                                f"No problem — I've built the annotation without {skipped}. "
+                                f"Here's the result."
+                            )
+                        final_response = {
+                            "text": response_text,
+                            "json_format": final_json,
+                            "agents_completed": ["annotation_agent"],
+                        }
+                        self.store.create_history(
+                            user_id=user_id,
+                            user_message=query,
+                            assistant_answer=response_text,
+                            graph_id_referenced=graph_id,
+                            content_ids=content_ids,
+                            urls=urls,
+                            agents_used=["annotation_agent"],
+                            pending_json=None,
+                        )
+                        emit_to_user(user=user_id, message=final_response, status="completed")
+                        return final_response
+            except Exception as e:
+                logger.error(f"Error checking pending confirmation: {e}", exc_info=True)
+
             # Get conversation history and memory
             try:
                 user_information = self.store.get_context_and_memory(user_id)
@@ -1039,10 +1184,21 @@ class AiAssistance:
 
                     # Extract answer
                     assistant_answer = agent_response.get("text", str(agent_response))
-                    
+
                     # Extract agents that were used
                     agents_used = agent_response.get("agents_completed", [])
-                    
+
+                    # Store pending_json in history when a confirmation is needed
+                    pending_json_data = None
+                    if agent_response.get("needs_confirmation"):
+                        unconfirmed = agent_response.get("unconfirmed_nodes", [])
+                        pending_json_data = {
+                            "pending_json": agent_response.get("pending_json"),
+                            "substitutions": [
+                                (u["original"], u["suggestion"]) for u in unconfirmed
+                            ],
+                        }
+
                     # ✅ Save complete history with ALL information
                     self.store.create_history(
                         user_id=user_id,
@@ -1052,10 +1208,16 @@ class AiAssistance:
                         content_ids=content_ids,
                         urls=urls,
                         agents_used=agents_used,
+                        pending_json=pending_json_data,
                     )
                     
-                    emit_to_user(user=user_id, message=agent_response, status="completed")
-                    return agent_response
+                    # Strip internal fields before sending to the frontend
+                    frontend_response = {
+                        k: v for k, v in agent_response.items()
+                        if k not in ("pending_json", "unconfirmed_nodes")
+                    }
+                    emit_to_user(user=user_id, message=frontend_response, status="completed")
+                    return frontend_response
                     
             else:
                 # No response generated
