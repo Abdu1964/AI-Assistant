@@ -136,11 +136,16 @@ You are a query classifier for a multi-agent system. Analyze the user's query an
 ## Classification Rules:
 
 - **Medical/health questions**: Use BOTH "rag, biogpt" for comprehensive answers
-- **Database queries about biological entities**: Use "annotation_biological" (add "rag" if explanation needed)
+- **Pure structural/retrieval annotation query** — only finding, listing, or mapping entities/relationships with no explanation requested: Use "annotation_biological" alone
+- **Annotation query that also asks for explanation, function, mechanism, or biological context**: Use "annotation_biological, biogpt"
 - **Questions about uploaded documents**: Always include "rag"
 - **Galaxy platform questions**: Use "galaxy" (add "rag" for additional context)
 - **General biological knowledge**: Use "biogpt" (add "rag" if broader context helps)
 - **Genetic hypothesis generation**: Use "hypothesis" for queries about generating hypotheses for genetic variants and tissues
+
+### When to add biogpt alongside annotation_biological:
+Add "biogpt" when the query uses words like: *explain, describe, what does X do, function of, role of, mechanism, pathway, why, how does, tell me about, what is*.
+Do NOT add "biogpt" when the query only uses words like: *find, show, list, get, fetch, map, which genes, what genes, retrieve*.
 
 ## Input:
 
@@ -151,8 +156,17 @@ Content summaries: {content_summaries}
 
 ## Examples:
 
-Query: "Find gene BRCA1 and tell me about its function"
-Response: annotation_biological, rag
+Query: "Find all genes from BRCA1, TP53 that regulate PTEN"
+Response: annotation_biological
+
+Query: "Find gene BRCA1 and explain its function"
+Response: annotation_biological, biogpt
+
+Query: "Show transcripts for TP53"
+Response: annotation_biological
+
+Query: "What does TP53 do and show me its annotation structure?"
+Response: annotation_biological, biogpt
 
 Query: "What are symptoms of vitamin D deficiency?"
 Response: rag, biogpt
@@ -171,6 +185,9 @@ Response: biogpt
 
 Query: "Find transcripts for TP53"
 Response: annotation_biological
+
+Query: "Describe the role of EGFR in cancer and retrieve its annotation"
+Response: annotation_biological, biogpt
 
 Query: "Generate a hypothesis for variant rs1421085 in adipose subcutaneous tissue"
 Response: hypothesis
