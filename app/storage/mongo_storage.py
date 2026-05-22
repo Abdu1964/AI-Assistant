@@ -70,15 +70,15 @@ class MongoManager:
     # ==================== CONVERSATION HISTORY METHODS ====================
     
     def create_history(
-        self, 
-        user_id: str, 
-        user_message: str, 
-        assistant_answer: str, 
+        self,
+        user_id: str,
+        user_message: str,
+        assistant_answer: str,
         graph_id_referenced: str = None,
         content_ids: list = None,
         urls: list = None,
         agents_used: list = None,
-
+        pending_json: dict = None,
     ):
         """
         Create a conversation history entry with both question and answer.
@@ -97,6 +97,7 @@ class MongoManager:
                 "content_ids":content_ids,
                 "urls":urls,
                 "agents_used": agents_used,
+                "pending_json": pending_json,
                 "memory": None,
                 "context": None,
                 "time": datetime.utcnow(),
@@ -189,6 +190,20 @@ class MongoManager:
 
         except Exception as e:
             logger.error(f"Error cleaning old user records: {e}")
+
+    def get_latest_pending_json(self, user_id: str):
+        """Return pending_json from the most recent history entry if it has one, else None."""
+        try:
+            latest = self.user_info_collection.find_one(
+                {"user_id": user_id},
+                sort=[("time", -1)]
+            )
+            if latest and latest.get("pending_json"):
+                return latest["pending_json"]
+            return None
+        except Exception as e:
+            logger.error(f"Error getting latest pending JSON: {e}")
+            return None
 
     def get_context_and_memory(self, user_id: str):
         try:
