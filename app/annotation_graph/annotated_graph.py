@@ -632,6 +632,17 @@ class Graph:
                 continue
             if apply:
                 subs = node["pending_substitutions"]
+
+                # Handle id-field substitution: move result to the correct property
+                node_id_val = node.get("id", "")
+                if node_id_val and node_id_val in subs:
+                    suggested = subs[node_id_val]
+                    id_prop = self._node_id_property.get(node.get("type", "").lower())
+                    if id_prop:
+                        node.setdefault("properties", {})[id_prop] = suggested
+                    node["id"] = ""
+
+                # Handle property-value substitutions
                 for prop_key, prop_val in node.get("properties", {}).items():
                     if not isinstance(prop_val, str):
                         continue
