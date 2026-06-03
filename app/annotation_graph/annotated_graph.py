@@ -459,6 +459,7 @@ class Graph:
             return {
                 "updated_json": updated_json,
                 "validation_report": validation_report,
+                "candidates": batch_for_llm,  # {item: [(candidate, score), ...]}
             }
 
         except Exception as e:
@@ -468,6 +469,7 @@ class Graph:
             return {
                 "updated_json": initial_json,
                 "validation_report": validation_report,
+                "candidates": {},
             }
 
     def _select_best_matching_property_value(self, user_input_value, possible_values):
@@ -518,26 +520,63 @@ class Graph:
         """Call from assistant_response when a pending confirmation exists.
         Returns a ready response dict, or None if query is a new unrelated question.
         """
-        pending = self._pending_confirmations.get(user_id)
-        if not pending:
+        entry = self._pending_confirmations.get(user_id)
+        if not entry:
             return None
+
+        pending_json = entry["json"]
+        candidates  = entry.get("candidates", {})
+        unconfirmed = entry.get("unconfirmed", [])
+
         verdict = self._classify_confirmation(query)
+
         if verdict == "confirm":
-            resolved = self._apply_pending_substitutions(pending, apply=True)
+            resolved = self._apply_pending_substitutions(pending_json, apply=True)
             del self._pending_confirmations[user_id]
             return {
                 "text": "Got it! I've built the annotation structure using the confirmed match. The structured data is ready.",
                 "json_format": resolved,
                 "agents_completed": ["annotation_agent"],
             }
+
         if verdict == "reject":
-            resolved = self._apply_pending_substitutions(pending, apply=False)
+            resolved = self._apply_pending_substitutions(pending_json, apply=False)
             del self._pending_confirmations[user_id]
             return {
                 "text": "Understood! I've built the annotation structure without the unidentified node. The structured data is ready.",
                 "json_format": resolved,
                 "agents_completed": ["annotation_agent"],
             }
+
+        if verdict == "show_alternatives":
+            # Show the other Neo4j candidates — keep pending active so user can still confirm/reject
+            lines = []
+            for u in unconfirmed:
+                original  = u["original"]
+                all_cands = candidates.get(original, [])
+                # Skip the already-suggested top hit; show the rest
+                suggestion = u["suggestion"]
+                others = [(v, s) for v, s in all_cands if v != suggestion]
+                if others:
+                    others_str = ", ".join(f"**{v}** ({round(s*100)}% similar)" for v, s in others[:4])
+                    lines.append(
+                        f"Other candidates for **'{original}'** in the database: {others_str}.\n"
+                        f"The closest remains **'{suggestion}'**. "
+                        f"Reply with the name you'd like to use, or say **yes** to use '{suggestion}', "
+                        f"or **no** to build without it."
+                    )
+                else:
+                    lines.append(
+                        f"There are no other similar entries for **'{original}'** in the database. "
+                        f"The only close match is **'{suggestion}'**. "
+                        f"Say **yes** to use it or **no** to build without it."
+                    )
+            return {
+                "text": "\n\n".join(lines),
+                "json_format": None,
+                "agents_completed": ["annotation_agent"],
+            }
+
         # New unrelated query — clear stale state and proceed normally
         del self._pending_confirmations[user_id]
         return None
@@ -555,11 +594,17 @@ class Graph:
         _REJECTS  = {"no", "nope", "n", "nah", "skip", "without", "exclude", "don't",
                      "cancel", "build without", "leave it out", "drop it", "ignore it",
                      "don't use", "dont use", "without it", "not needed"}
+        _ALT_KEYWORDS = ("another", "other", "different", "instead", "else",
+                         "alternative", "options", "similar", "nearest", "closest",
+                         "find another", "show me other", "what else", "not that",
+                         "not znf", "not the", "other one", "forgot the name")
 
         if msg in _CONFIRMS or any(msg.startswith(c + " ") for c in _CONFIRMS):
             return "confirm"
         if msg in _REJECTS or any(msg.startswith(r + " ") for r in _REJECTS):
             return "reject"
+        if any(kw in msg for kw in _ALT_KEYWORDS):
+            return "show_alternatives"
 
         # Ambiguous — ask the LLM
         prompt = (
@@ -567,15 +612,16 @@ class Graph:
             f"unrecognized database entry with a suggested match. The user replied:\n\n"
             f"\"{message}\"\n\n"
             f"Classify the reply as exactly one of:\n"
-            f"- confirm   (user agrees to use the suggested match)\n"
-            f"- reject    (user wants to skip/exclude it and build without it)\n"
-            f"- new_query (user is asking something completely unrelated)\n\n"
-            f"Reply with only one word: confirm, reject, or new_query."
+            f"- confirm          (user agrees to use the suggested match)\n"
+            f"- reject           (user wants to skip/exclude it and build without it)\n"
+            f"- show_alternatives (user wants to see other possible matches)\n"
+            f"- new_query        (user is asking something completely unrelated)\n\n"
+            f"Reply with only one word: confirm, reject, show_alternatives, or new_query."
         )
         try:
             result = self.llm.generate(prompt)
             verdict = result.strip().lower().split()[0] if result else "new_query"
-            return verdict if verdict in ("confirm", "reject", "new_query") else "new_query"
+            return verdict if verdict in ("confirm", "reject", "show_alternatives", "new_query") else "new_query"
         except Exception:
             return "new_query"
 
@@ -967,7 +1013,11 @@ class Graph:
 
                 if unconfirmed_nodes:
                     logger.info(f"Returning needs_confirmation for {len(unconfirmed_nodes)} node(s)")
-                    self._pending_confirmations[user_id] = validation["updated_json"]
+                    self._pending_confirmations[user_id] = {
+                        "json": validation["updated_json"],
+                        "candidates": validation.get("candidates", {}),
+                        "unconfirmed": unconfirmed_nodes,
+                    }
                     return {
                         "success": True,
                         "needs_confirmation": True,
