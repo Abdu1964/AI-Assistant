@@ -10,6 +10,7 @@ from app.prompts.annotation_prompts import (
     EXTRACT_RELEVANT_INFORMATION_PROMPT,
     JSON_CONVERSION_PROMPT,
     SELECT_PROPERTY_VALUE_PROMPT,
+    SELECT_PROPERTY_VALUES_BATCH_PROMPT,
     RESULT_SUMMARIZATION_PROMPT,
 )
 from app.socket_manager import emit_to_user
@@ -36,6 +37,23 @@ class Graph:
             username=os.getenv("NEO4J_USERNAME"),
             password=os.getenv("NEO4J_PASSWORD"),
         )
+        # In-memory pending annotation confirmations: {user_id: pending_json}
+        self._pending_confirmations: dict = {}
+
+        # Maps node type → the Neo4j property to use when searching by the JSON `id` field
+        self._node_id_property = {
+            "gene": "gene_name",
+            "transcript": "transcript_id",
+            "exon": "exon_id",
+            "protein": "protein_id",
+            "variant": "variant_id",
+            "pathway": "pathway_name",
+            "go_term": "go_id",
+            "tad": "tad_id",
+            "regulatory_element": "regulatory_element_id",
+            "enhancer": "enhancer_id",
+            "promoter": "promoter_id",
+        }
 
     def query_knowledge_graph(self, json_query, token):
         """
@@ -187,6 +205,14 @@ class Graph:
             for node in updated_json.get("nodes"):
                 node_type = node.get("type")
                 properties = node.get("properties", {})
+
+                # Also validate the `id` field using the node type's primary property
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        lookup_needed.setdefault((node_type, id_prop), set()).add(node_db_id)
+
                 for property_key, property_value in properties.items():
                     if not property_value and property_value != 0:
                         continue
@@ -207,6 +233,51 @@ class Graph:
                 for value, matches in batch.items():
                     similarity_cache[(node_type, property_key, value)] = matches
 
+            # Pre-pass: collect non-exact items for a single batched LLM call
+            batch_for_llm = {}  # item -> [(candidate, score), ...]
+            for node in updated_json.get("nodes"):
+                node_type = node.get("type")
+                properties = node.get("properties", {})
+
+                # Check id field
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        similar = similarity_cache.get((node_type, id_prop, node_db_id), [])
+                        if similar:
+                            if similar[0][0].lower() != node_db_id.lower():
+                                batch_for_llm[node_db_id] = similar
+                        else:
+                            # No Neo4j candidates at all — still needs confirmation with empty list
+                            batch_for_llm[node_db_id] = []
+
+                for property_key, property_value in properties.items():
+                    if not property_value and property_value != 0:
+                        continue
+                    if node.get("is_list") and isinstance(property_value, (str, list)):
+                        items = (
+                            [i.strip() for i in property_value.split(",") if i.strip()]
+                            if isinstance(property_value, str) else property_value
+                        )
+                        for item in items:
+                            similar = similarity_cache.get((node_type, property_key, item), [])
+                            if similar:
+                                if similar[0][0].lower() != item.lower():
+                                    batch_for_llm[item] = similar
+                            else:
+                                batch_for_llm[item] = []
+                    elif isinstance(property_value, str):
+                        similar = similarity_cache.get((node_type, property_key, property_value), [])
+                        if similar:
+                            if similar[0][0].lower() != property_value.lower():
+                                batch_for_llm[property_value] = similar
+                        else:
+                            batch_for_llm[property_value] = []
+
+            # One LLM call for all ambiguous items → {item: {"value": ..., "auto_accept": bool} | None}
+            llm_picks = self._select_best_matching_values_batch(batch_for_llm)
+
             for node in updated_json.get("nodes"):
                 node_type = node.get("type")
                 properties = node.get("properties", {})
@@ -214,6 +285,31 @@ class Graph:
                 node_types[node_id] = node_type
                 if not node.get("is_list"):
                     node["status"] = True
+
+                # Validate `id` field if set
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        similar_values = similarity_cache.get((node_type, id_prop, node_db_id), [])
+                        if similar_values and similar_values[0][0].lower() == node_db_id.lower():
+                            pass  # exact match — fine
+                        else:
+                            pick = llm_picks.get(node_db_id)
+                            top = similar_values[0][0] if similar_values else None
+                            suggestion = (pick["value"] if pick and not pick.get("auto_accept") else
+                                          (pick["value"] if pick and pick.get("auto_accept") else top))
+                            if pick and pick.get("auto_accept"):
+                                # Trivial difference — silently fix the id
+                                node["id"] = pick["value"]
+                            else:
+                                # Genuinely different or no LLM pick — ask user
+                                node["status"] = False
+                                node["needs_confirmation"] = True
+                                node["pending_substitutions"] = {node_db_id: suggestion or node_db_id}
+                                validation_report["failed_nodes"].append(
+                                    {"node_id": node_id, "reason": f"'{node_db_id}' not found in database"}
+                                )
 
                 # Track removed properties
                 for property_key in list(properties.keys()):
@@ -241,37 +337,34 @@ class Graph:
                         for item in items:
                             similar_values = similarity_cache.get((node_type, property_key, item), [])
                             if similar_values:
-                                selected_property = self._select_best_matching_property_value(
-                                    item, similar_values
-                                )
-                                selected = selected_property.get("selected_value")
-                                if selected:
-                                    if selected.lower() == item.lower():
-                                        # Same name, just canonicalize case — auto-accept
-                                        validated_items.append(selected)
-                                    else:
-                                        # Different name — ask the user first
-                                        failed_items.append(item)
-                                        item_suggestions[item] = selected
+                                top = similar_values[0][0]
+                                if top.lower() == item.lower():
+                                    # Exact case match — auto-accept
+                                    validated_items.append(top)
                                 else:
-                                    failed_items.append(item)
-                                    top = similar_values[0][0]
-                                    if top.lower() != item.lower():
-                                        item_suggestions[item] = top
+                                    pick = llm_picks.get(item)
+                                    if pick is None:
+                                        # LLM says no clear match — still ask with the top Neo4j result
+                                        failed_items.append(item)
+                                        if similar_values:
+                                            item_suggestions[item] = similar_values[0][0]
+                                    elif pick.get("auto_accept"):
+                                        # Trivial typo/case/punctuation — silently fix
+                                        validated_items.append(pick["value"])
+                                    else:
+                                        # Genuinely different entity — ask user
+                                        failed_items.append(item)
+                                        item_suggestions[item] = pick["value"]
                             else:
                                 failed_items.append(item)
 
-                        # Items with suggestions → ask user; truly missing (no suggestion) → keep as-is
                         confirmable = {
                             item: item_suggestions[item]
-                            for item in failed_items
-                            if item in item_suggestions
+                            for item in failed_items if item in item_suggestions
                         }
                         truly_missing = [item for item in failed_items if item not in item_suggestions]
 
-                        # Only include validated + truly-missing items in the property for now
                         properties[property_key] = ", ".join(validated_items + truly_missing)
-
                         if failed_items:
                             node["status"] = False
                             if confirmable:
@@ -288,41 +381,35 @@ class Graph:
 
                     elif isinstance(property_value, str):
                         similar_values = similarity_cache.get((node_type, property_key, property_value), [])
-
                         if similar_values:
-                            selected_property = (
-                                self._select_best_matching_property_value(
-                                    property_value, similar_values
-                                )
-                            )
-
-                            if selected_property.get("selected_value"):
-                                new_value = selected_property.get("selected_value")
-                                if new_value.lower() == property_value.lower():
-                                    # Same name, just canonicalize case — auto-accept
-                                    properties[property_key] = new_value
-                                else:
-                                    # Different value — ask for confirmation before substituting
+                            top = similar_values[0][0]
+                            if top.lower() == property_value.lower():
+                                # Exact case match — auto-accept
+                                properties[property_key] = top
+                            else:
+                                pick = llm_picks.get(property_value)
+                                if pick is None:
+                                    # LLM unsure — still ask with the top Neo4j result
                                     node["status"] = False
                                     node["needs_confirmation"] = True
-                                    node["pending_substitutions"] = {property_value: new_value}
+                                    node["pending_substitutions"] = {property_value: top}
+                                    validation_report["failed_nodes"].append(
+                                        {"node_id": node_id, "reason": f"'{property_value}' not found; nearest is '{top}'"}
+                                    )
+                                elif pick.get("auto_accept"):
+                                    # Trivial difference — silently fix
+                                    properties[property_key] = pick["value"]
+                                else:
+                                    # Genuinely different — ask user
+                                    node["status"] = False
+                                    node["needs_confirmation"] = True
+                                    node["pending_substitutions"] = {property_value: pick["value"]}
                                     validation_report["failed_nodes"].append(
                                         {
                                             "node_id": node_id,
-                                            "reason": f"'{property_value}' not found exactly; nearest match is '{new_value}'",
+                                            "reason": f"'{property_value}' not found; nearest match is '{pick['value']}'",
                                         }
                                     )
-                            else:
-                                node["status"] = False
-                                top = similar_values[0][0]
-                                if top.lower() != property_value.lower():
-                                    node["needs_confirmation"] = True
-                                    node["pending_substitutions"] = {property_value: top}
-                                else:
-                                    node["validation_error"] = f"No suitable match found for '{property_value}'."
-                                validation_report["failed_nodes"].append(
-                                    {"node_id": node_id, "reason": f"'{property_value}' not found in the database."}
-                                )
                         else:
                             node["status"] = False
                             node["validation_error"] = f"'{property_value}' not found in the database."
@@ -330,34 +417,40 @@ class Graph:
                                 {"node_id": node_id, "reason": node["validation_error"]}
                             )
 
-            # Validate edge direction
+            # Validate edge direction — remove edges that don't exist in the schema
+            valid_predicates = []
             for edge in updated_json.get("predicates", []):
                 s = node_types.get(edge["source"])
                 t = node_types.get(edge["target"])
                 rel = edge["type"]
                 conn = f"{s}-{rel}-{t}"
 
-                if conn not in self.schema_handler.processed_schema:
+                if conn in self.schema_handler.processed_schema:
+                    valid_predicates.append(edge)
+                else:
                     rev = f"{t}-{rel}-{s}"
-                    if rev not in self.schema_handler.processed_schema:
-                        raise ValueError(
-                            f"Invalid source {s} and target {t} for predicate {rel}"
+                    if rev in self.schema_handler.processed_schema:
+                        # Swap direction and keep
+                        validation_report["direction_changes"].append(
+                            {"relation_type": rel, "original": f"{s} → {t}", "corrected": f"{t} → {s}"}
                         )
-                    # Track direction changes
-                    validation_report["direction_changes"].append(
-                        {
-                            "relation_type": rel,
-                            "original": f"{s} → {t}",
-                            "corrected": f"{t} → {s}",
-                        }
-                    )
-                    # Swap source and target
-                    temp_s = edge["source"]
-                    edge["source"] = edge["target"]
-                    edge["target"] = temp_s
+                        edge["source"], edge["target"] = edge["target"], edge["source"]
+                        valid_predicates.append(edge)
+                    else:
+                        # Not in schema at all — drop it silently
+                        logger.warning(f"Dropping invalid predicate: {conn}")
+                        validation_report.setdefault("removed_predicates", []).append(
+                            {"type": rel, "source": s, "target": t}
+                        )
+            updated_json["predicates"] = valid_predicates
 
             for node in updated_json.get("nodes", []):
                 node.pop("is_list", None)
+
+            # Remove duplicate nodes (same type + properties) the LLM may have hallucinated
+            updated_json["nodes"] = self._deduplicate_nodes(
+                updated_json.get("nodes", []), updated_json.get("predicates", [])
+            )
 
             logger.info(
                 f"Validated and updated JSON: \n{json.dumps(updated_json, indent=2)}"
@@ -388,6 +481,196 @@ class Graph:
         except Exception as e:
             logger.error(f"Failed to select property value: {e}")
             raise
+
+    def _select_best_matching_values_batch(self, items_with_candidates: dict) -> dict:
+        """One LLM call for all ambiguous items.
+        Returns {item: {"value": str, "auto_accept": bool} | None}
+        """
+        if not items_with_candidates:
+            return {}
+        items_repr = {
+            item: [{"value": v, "similarity": round(s, 2)} for v, s in candidates[:5]]
+            for item, candidates in items_with_candidates.items()
+        }
+        prompt = SELECT_PROPERTY_VALUES_BATCH_PROMPT.format(
+            items_json=json.dumps(items_repr, indent=2)
+        )
+        result = self.llm.generate(prompt)
+        logger.info(f"Batch LLM picks: {result}")
+        if isinstance(result, dict):
+            out = {}
+            for k, v in result.items():
+                if v is None or str(v).lower() == "null":
+                    out[k] = None
+                elif isinstance(v, dict) and "value" in v:
+                    out[k] = {"value": v["value"], "auto_accept": bool(v.get("auto_accept", False))}
+                else:
+                    out[k] = None
+            return out
+        return {item: None for item in items_with_candidates}
+
+    # ── Confirmation flow ─────────────────────────────────────────────────────
+
+    def has_pending_for(self, user_id: str) -> bool:
+        return user_id in self._pending_confirmations
+
+    def handle_confirmation_response(self, user_id: str, query: str):
+        """Call from assistant_response when a pending confirmation exists.
+        Returns a ready response dict, or None if query is a new unrelated question.
+        """
+        pending = self._pending_confirmations.get(user_id)
+        if not pending:
+            return None
+        verdict = self._classify_confirmation(query)
+        if verdict == "confirm":
+            resolved = self._apply_pending_substitutions(pending, apply=True)
+            del self._pending_confirmations[user_id]
+            return {
+                "text": "Got it! I've built the annotation structure using the confirmed match. The structured data is ready.",
+                "json_format": resolved,
+                "agents_completed": ["annotation_agent"],
+            }
+        if verdict == "reject":
+            resolved = self._apply_pending_substitutions(pending, apply=False)
+            del self._pending_confirmations[user_id]
+            return {
+                "text": "Understood! I've built the annotation structure without the unidentified node. The structured data is ready.",
+                "json_format": resolved,
+                "agents_completed": ["annotation_agent"],
+            }
+        # New unrelated query — clear stale state and proceed normally
+        del self._pending_confirmations[user_id]
+        return None
+
+    def _classify_confirmation(self, message: str) -> str:
+        """Returns 'confirm', 'reject', or 'new_query'.
+        Fast-paths obvious yes/no before calling the LLM.
+        """
+        msg = message.strip().lower().rstrip(".!,")
+
+        _CONFIRMS = {"yes", "yeah", "yep", "yup", "yap", "sure", "ok", "okay", "y",
+                     "correct", "go ahead", "proceed", "use it", "use that", "do it",
+                     "confirm", "sounds good", "that's fine", "go for it", "sure thing",
+                     "let's go", "absolutely", "definitely", "of course", "please do"}
+        _REJECTS  = {"no", "nope", "n", "nah", "skip", "without", "exclude", "don't",
+                     "cancel", "build without", "leave it out", "drop it", "ignore it",
+                     "don't use", "dont use", "without it", "not needed"}
+
+        if msg in _CONFIRMS or any(msg.startswith(c + " ") for c in _CONFIRMS):
+            return "confirm"
+        if msg in _REJECTS or any(msg.startswith(r + " ") for r in _REJECTS):
+            return "reject"
+
+        # Ambiguous — ask the LLM
+        prompt = (
+            f"The assistant asked a yes/no confirmation question about substituting an "
+            f"unrecognized database entry with a suggested match. The user replied:\n\n"
+            f"\"{message}\"\n\n"
+            f"Classify the reply as exactly one of:\n"
+            f"- confirm   (user agrees to use the suggested match)\n"
+            f"- reject    (user wants to skip/exclude it and build without it)\n"
+            f"- new_query (user is asking something completely unrelated)\n\n"
+            f"Reply with only one word: confirm, reject, or new_query."
+        )
+        try:
+            result = self.llm.generate(prompt)
+            verdict = result.strip().lower().split()[0] if result else "new_query"
+            return verdict if verdict in ("confirm", "reject", "new_query") else "new_query"
+        except Exception:
+            return "new_query"
+
+    def _apply_pending_substitutions(self, pending_json: dict, apply: bool = True) -> dict:
+        result = copy.deepcopy(pending_json)
+        for node in result.get("nodes", []):
+            if not (node.get("needs_confirmation") and node.get("pending_substitutions")):
+                continue
+            if apply:
+                subs = node["pending_substitutions"]
+                for prop_key, prop_val in node.get("properties", {}).items():
+                    if not isinstance(prop_val, str):
+                        continue
+                    parts = [p.strip() for p in prop_val.split(",") if p.strip()]
+                    replaced = set()
+                    new_parts = []
+                    for part in parts:
+                        replacement = next(
+                            (sugg for orig, sugg in subs.items() if part.lower() == orig.lower()),
+                            None,
+                        )
+                        if replacement:
+                            new_parts.append(replacement)
+                            replaced.add(part.lower())
+                        else:
+                            new_parts.append(part)
+                    existing_lower = {p.lower() for p in new_parts}
+                    for orig, sugg in subs.items():
+                        if orig.lower() not in replaced and sugg.lower() not in existing_lower:
+                            new_parts.append(sugg)
+                            existing_lower.add(sugg.lower())
+                    node["properties"][prop_key] = ", ".join(new_parts)
+            node["status"] = True
+            for key in ("needs_confirmation", "pending_substitutions", "all_list_values",
+                        "not_validated", "validation_error"):
+                node.pop(key, None)
+
+        # Deduplicate nodes that ended up with identical type + properties after substitution
+        result["nodes"] = self._deduplicate_nodes(result.get("nodes", []), result.get("predicates", []))
+        return result
+
+    def _deduplicate_nodes(self, nodes: list, predicates: list) -> list:
+        """Remove nodes whose type+properties are exact duplicates of an earlier node.
+        Predicates that reference a removed duplicate are remapped to the surviving node.
+        """
+        seen = {}       # (type, frozenset(properties.items())) -> surviving node_id
+        removed = {}    # removed node_id -> surviving node_id
+        kept = []
+        for node in nodes:
+            key = (node.get("type", ""), frozenset(
+                (k, v) for k, v in node.get("properties", {}).items()
+            ))
+            if key in seen:
+                removed[node["node_id"]] = seen[key]
+            else:
+                seen[key] = node["node_id"]
+                kept.append(node)
+
+        # Remap predicates
+        if removed:
+            for pred in predicates:
+                if pred.get("source") in removed:
+                    pred["source"] = removed[pred["source"]]
+                if pred.get("target") in removed:
+                    pred["target"] = removed[pred["target"]]
+
+        return kept
+
+    def _build_confirmation_text(self, unconfirmed_nodes: list) -> str:
+        if len(unconfirmed_nodes) == 1:
+            u = unconfirmed_nodes[0]
+            all_vals = u.get("all_list_values") or []
+            known_vals = [v for v in all_vals if v != u["original"]]
+
+            base = (
+                f"I couldn't find **'{u['original']}'** in the database. "
+                f"The closest match I found is **'{u['suggestion']}'**.\n\n"
+                f"Should I go ahead and use **'{u['suggestion']}'** in place of **'{u['original']}'**?"
+            )
+            if known_vals:
+                base += f" Or would you like me to build the annotation without it, using only {known_vals}?"
+            else:
+                base += " Or would you like to cancel and try a different identifier?"
+            return base
+
+        lines = ["I couldn't find some of the nodes you mentioned in the database:"]
+        for u in unconfirmed_nodes:
+            lines.append(
+                f"  - **'{u['original']}'** — closest match is **'{u['suggestion']}'**"
+            )
+        lines.append(
+            "\nShould I go ahead with these substitutions? "
+            "Or would you prefer I build the annotation skipping the unrecognised nodes?"
+        )
+        return "\n".join(lines)
 
     def execute_cypher_query(self, cypher_query):
         # Execute a Cypher query against the Neo4j database and return structured results
@@ -684,11 +967,11 @@ class Graph:
 
                 if unconfirmed_nodes:
                     logger.info(f"Returning needs_confirmation for {len(unconfirmed_nodes)} node(s)")
+                    self._pending_confirmations[user_id] = validation["updated_json"]
                     return {
                         "success": True,
                         "needs_confirmation": True,
-                        "pending_json": validation["updated_json"],
-                        "unconfirmed_nodes": unconfirmed_nodes,
+                        "confirmation_text": self._build_confirmation_text(unconfirmed_nodes),
                         "summary": None,
                         "json_format": None,
                         "validation_report": validation["validation_report"],
