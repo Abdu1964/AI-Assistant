@@ -21,6 +21,7 @@ Let's think step by step to extract the relevant information needed to build the
 - Only add property keys if mentioned in the user query
 - Never grab the property from the schema
 - Never infer an id from your knowledge
+- **NEVER create nodes for entities not explicitly named in the user query — do NOT add similar or related entities based on your own knowledge**
 
 ### LIST DETECTION RULES:
 - If the query provides multiple values for the same node type (e.g. a list of gene names), treat them as a SINGLE list node — do NOT create one node per value.
@@ -38,12 +39,14 @@ Let's think step by step to extract the relevant information needed to build the
   - "Find transcript ENST00000441515" → `id: ""`, `properties: {{"transcript_id": "ENST00000441515"}}`
 
 ### RELATIONSHIP INFERENCE RULES:
-- **Only add relationships when the query explicitly asks for connected information**
+- **Only add relationships when the query EXPLICITLY names a second entity type or uses words like "related to", "connected to", "transcripts of", "exons of", "regulates", etc.**
+- Words like "annotate", "find", "show", "get", "what is" do NOT imply relationships — return only the named node
 - **Examples:**
-  - "Find gene BRCA1" → NO relationships needed (just the gene)
+  - "Find gene BRCA1" → NO relationships (just the gene)
+  - "Annotate gene BRCA1" → NO relationships (just the gene)
   - "Show me transcripts of gene BRCA1" → ADD transcribed_to relationship
-  - "Find transcript ENST00000441515" → NO relationships needed (just the transcript)
-  - "Show me exons of transcript ENST00000441515" → ADD includes relationship
+  - "What TAD does FTO sit in?" → ADD in_tad_region relationship
+  - "Find transcript ENST00000441515" → NO relationships (just the transcript)
 
 ### RESPONSE FORMAT:
 Provide your response in the following format:
@@ -104,8 +107,8 @@ Convert the Extracted information into the target JSON format based on the schem
 
 ### Conversion rules:
 1. Generate unique `node_ids` for each node in the format "label_X" (e.g., "gene_1", "transcript_1", "gene_list_A").
-2. Include **ALL nodes** mentioned in the extracted information in the "nodes" list.
-3. Ensure all nodes that appear in the predicates (relationships) are also included in the "nodes" list, even if they were not explicitly extracted.
+2. Include **ONLY nodes explicitly named in the user query** — never add nodes based on your own knowledge or similarity.
+3. Ensure all nodes that appear in the predicates (relationships) are also included in the "nodes" list.
 4. Ensure all predicates (relationships) **exactly match** those defined in the schema above.
 5. **Do NOT add** any information not present in the extracted information or schema.
 6. Use the correct node types from the schema above.
@@ -192,4 +195,23 @@ Please provide a clear, natural language summary that:
 6. Keeps the response under 200 words
 
 **Response:**
+"""
+
+SELECT_PROPERTY_VALUES_BATCH_PROMPT = """You are a biological database validation assistant.
+
+For each search query below you are given candidate values found via string-similarity search in a biological database.
+For each query decide:
+1. Is any candidate the same biological entity as the query?
+2. If yes — is the difference trivial (case, whitespace, punctuation, obvious typo) that it can be silently auto-corrected, or is it different enough that the user should confirm?
+
+Rules:
+- auto_accept: true  → same entity, trivial difference only (e.g. "BRAC1"→"BRCA1", "tp53"→"TP53", "Alzheimers Disease"→"Alzheimer's Disease")
+- auto_accept: false → plausible match but genuinely different-looking (e.g. random string → real gene name the user probably didn't know)
+- null               → no plausible match at all
+
+Items to evaluate (JSON):
+{items_json}
+
+Respond with ONLY a valid JSON object. No explanation, no markdown fences.
+Example: {{"BRAC1": {{"value": "BRCA1", "auto_accept": true}}, "hgf6d7": {{"value": "ZNF697", "auto_accept": false}}, "xyz999": null}}
 """
