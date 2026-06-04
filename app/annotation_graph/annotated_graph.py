@@ -14,6 +14,7 @@ from app.prompts.annotation_prompts import (
     RESULT_SUMMARIZATION_PROMPT,
 )
 from app.socket_manager import emit_to_user
+from app.storage.redis import redis_manager
 from .json_to_cypher import JsonToCypherConverter
 
 
@@ -37,8 +38,10 @@ class Graph:
             username=os.getenv("NEO4J_USERNAME"),
             password=os.getenv("NEO4J_PASSWORD"),
         )
-        # In-memory pending annotation confirmations: {user_id: pending_json}
-        self._pending_confirmations: dict = {}
+        # Pending annotation confirmations — Redis-backed (cross-process), in-memory fallback
+        self._redis = redis_manager
+        self._pending_fallback: dict = {}  # used only when Redis is unavailable
+        self._PENDING_TTL = 600  # 10 minutes
 
         # Maps node type → the Neo4j property to use when searching by the JSON `id` field
         self._node_id_property = {
@@ -511,10 +514,33 @@ class Graph:
             return out
         return {item: None for item in items_with_candidates}
 
+    # ── Pending state helpers (Redis-backed, in-memory fallback) ─────────────
+
+    def _set_pending(self, user_id: str, data: dict):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            self._redis.client.set(key, json.dumps(data), ex=self._PENDING_TTL)
+        else:
+            self._pending_fallback[user_id] = data
+
+    def _get_pending(self, user_id: str):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            raw = self._redis.client.get(key)
+            return json.loads(raw) if raw else None
+        return self._pending_fallback.get(user_id)
+
+    def _clear_pending(self, user_id: str):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            self._redis.client.delete(key)
+        else:
+            self._pending_fallback.pop(user_id, None)
+
     # ── Confirmation flow ─────────────────────────────────────────────────────
 
     def has_pending_for(self, user_id: str) -> bool:
-        return user_id in self._pending_confirmations
+        return self._get_pending(user_id) is not None
 
     def handle_confirmation_response(self, user_id: str, query: str):
         """Call from assistant_response when a pending confirmation exists.
@@ -582,40 +608,19 @@ class Graph:
         return None
 
     def _classify_confirmation(self, message: str) -> str:
-        """Returns 'confirm', 'reject', or 'new_query'.
-        Fast-paths obvious yes/no before calling the LLM.
-        """
-        msg = message.strip().lower().rstrip(".!,")
-
-        _CONFIRMS = {"yes", "yeah", "yep", "yup", "yap", "sure", "ok", "okay", "y",
-                     "correct", "go ahead", "proceed", "use it", "use that", "do it",
-                     "confirm", "sounds good", "that's fine", "go for it", "sure thing",
-                     "let's go", "absolutely", "definitely", "of course", "please do"}
-        _REJECTS  = {"no", "nope", "n", "nah", "skip", "without", "exclude", "don't",
-                     "cancel", "build without", "leave it out", "drop it", "ignore it",
-                     "don't use", "dont use", "without it", "not needed"}
-        _ALT_KEYWORDS = ("another", "other", "different", "instead", "else",
-                         "alternative", "options", "similar", "nearest", "closest",
-                         "find another", "show me other", "what else", "not that",
-                         "not znf", "not the", "other one", "forgot the name")
-
-        if msg in _CONFIRMS or any(msg.startswith(c + " ") for c in _CONFIRMS):
-            return "confirm"
-        if msg in _REJECTS or any(msg.startswith(r + " ") for r in _REJECTS):
-            return "reject"
-        if any(kw in msg for kw in _ALT_KEYWORDS):
-            return "show_alternatives"
-
-        # Ambiguous — ask the LLM
+        """Uses the LLM to understand what the user meant — no keyword matching."""
         prompt = (
-            f"The assistant asked a yes/no confirmation question about substituting an "
-            f"unrecognized database entry with a suggested match. The user replied:\n\n"
+            f"The assistant asked the user to confirm whether to substitute an unrecognised "
+            f"database entry with a suggested match. The user replied:\n\n"
             f"\"{message}\"\n\n"
-            f"Classify the reply as exactly one of:\n"
-            f"- confirm          (user agrees to use the suggested match)\n"
-            f"- reject           (user wants to skip/exclude it and build without it)\n"
-            f"- show_alternatives (user wants to see other possible matches)\n"
-            f"- new_query        (user is asking something completely unrelated)\n\n"
+            f"Classify the user's intent as exactly one of:\n"
+            f"- confirm           — user agrees to use the suggested match "
+            f"(e.g. 'yes', 'sure', 'use it', 'go ahead', 'that works', 'use ZNF697')\n"
+            f"- reject            — user wants to build without the unidentified node "
+            f"(e.g. 'no', 'skip it', 'build without', 'leave it out')\n"
+            f"- show_alternatives — user wants to see other possible matches from the database "
+            f"(e.g. 'find another', 'show me others', 'what else is there', 'forgot the name')\n"
+            f"- new_query         — user is asking something completely unrelated to the confirmation\n\n"
             f"Reply with only one word: confirm, reject, show_alternatives, or new_query."
         )
         try:
