@@ -706,6 +706,50 @@ class Graph:
 
         return kept
 
+    def _describe_annotation_result(self, query: str, validated_json: dict) -> str:
+        """Generate a meaningful biological description from the query + validated JSON.
+        Replaces the generic 'structure created successfully' text so the aggregator
+        has real content to work with instead of hallucinating.
+        """
+        try:
+            nodes = validated_json.get("nodes", [])
+            predicates = validated_json.get("predicates", [])
+
+            node_id_to_label = {}
+            node_lines = []
+            for n in nodes:
+                nid  = n.get("node_id", "")
+                ntype = n.get("type", "unknown")
+                props = n.get("properties", {})
+                prop_str = ", ".join(f"{k}: {v}" for k, v in props.items()) if props else "(no properties)"
+                node_lines.append(f"- {ntype} [{nid}]: {prop_str}")
+                node_id_to_label[nid] = f"{ntype}({prop_str})"
+
+            pred_lines = []
+            for p in predicates:
+                src = node_id_to_label.get(p.get("source", ""), p.get("source", ""))
+                tgt = node_id_to_label.get(p.get("target", ""), p.get("target", ""))
+                pred_lines.append(f"- {src} --[{p.get('type', '')}]--> {tgt}")
+
+            structure_summary = "Nodes:\n" + "\n".join(node_lines)
+            if pred_lines:
+                structure_summary += "\n\nRelationships:\n" + "\n".join(pred_lines)
+
+            prompt = (
+                f"A user asked: \"{query}\"\n\n"
+                f"The following annotation structure was built from the database schema:\n\n"
+                f"{structure_summary}\n\n"
+                f"Write 1-3 sentences describing what this structure represents biologically "
+                f"and what query it will run. Be specific about the entities and relationships "
+                f"involved. Do NOT invent data, relationships, or biological facts not shown above. "
+                f"Do NOT mention the annotation system or technical details."
+            )
+            result = self.llm.generate(prompt)
+            return result.strip() if result else "The annotation structure was built successfully."
+        except Exception as e:
+            logger.warning(f"Failed to generate annotation description: {e}")
+            return "The annotation structure was built successfully."
+
     def _build_confirmation_text(self, unconfirmed_nodes: list) -> str:
         if len(unconfirmed_nodes) == 1:
             u = unconfirmed_nodes[0]
@@ -1044,9 +1088,11 @@ class Graph:
                         "resource": {"id": None, "type": "annotation"},
                     }
 
+                summary = self._describe_annotation_result(query, validation["updated_json"])
+
                 json_query = {
                     "success": True,
-                    "summary": None,
+                    "summary": summary,
                     "json_format": validation["updated_json"],
                     "validation_report": validation["validation_report"],
                     "resource": {"id": None, "type": "annotation"},
