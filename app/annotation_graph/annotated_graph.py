@@ -572,7 +572,7 @@ class Graph:
         """Call from assistant_response when a pending confirmation exists.
         Returns a ready response dict, or None if query is a new unrelated question.
         """
-        entry = self._pending_confirmations.get(user_id)
+        entry = self._get_pending(user_id)
         if not entry:
             return None
 
@@ -585,7 +585,7 @@ class Graph:
 
         if verdict == "confirm":
             resolved = self._apply_pending_substitutions(pending_json, apply=True)
-            del self._pending_confirmations[user_id]
+            self._clear_pending(user_id)
             return {
                 "text": "Got it! I've built the annotation structure using the confirmed match. The structured data is ready.",
                 "json_format": resolved,
@@ -595,7 +595,7 @@ class Graph:
 
         if verdict == "reject":
             resolved = self._apply_pending_substitutions(pending_json, apply=False)
-            del self._pending_confirmations[user_id]
+            self._clear_pending(user_id)
             return {
                 "text": "Understood! I've built the annotation structure without the unidentified node. The structured data is ready.",
                 "json_format": resolved,
@@ -633,7 +633,7 @@ class Graph:
             }
 
         # New unrelated query — clear stale state and proceed normally
-        del self._pending_confirmations[user_id]
+        self._clear_pending(user_id)
         return None
 
     def _classify_confirmation(self, message: str) -> str:
@@ -1116,12 +1116,12 @@ class Graph:
 
                 if unconfirmed_nodes:
                     logger.info(f"Returning needs_confirmation for {len(unconfirmed_nodes)} node(s)")
-                    self._pending_confirmations[user_id] = {
+                    self._set_pending(user_id, {
                         "json": validation["updated_json"],
                         "candidates": validation.get("candidates", {}),
                         "unconfirmed": unconfirmed_nodes,
                         "organism": organism,
-                    }
+                    })
                     return {
                         "success": True,
                         "needs_confirmation": True,
