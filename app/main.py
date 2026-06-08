@@ -84,13 +84,14 @@ class AiAssistance:
         advanced_llm,
         basic_llm,
         schema_handler,
+        fly_schema_handler=None,
         qdrant_client=None,
         embedding_model=None,
         mongo_db_manager=None,
     ) -> None:
         self.advanced_llm = advanced_llm
         self.basic_llm = basic_llm
-        self.annotation_graph = Graph(advanced_llm, schema_handler)
+        self.annotation_graph = Graph(advanced_llm, schema_handler, fly_schema_handler=fly_schema_handler)
         self.graph_summarizer = Graph_Summarizer(self.advanced_llm)
         self.rag = RAG(llm=advanced_llm, qdrant_client=qdrant_client)
         self.store = mongo_db_manager
@@ -347,11 +348,13 @@ class AiAssistance:
                 summary = pipeline_response.get("summary", "")
                 json_format = pipeline_response.get("json_format", None)
                 validation_report = pipeline_response.get("validation_report", {})
+                organism = pipeline_response.get("organism", "human")
 
                 response_dict = {
                     "text": summary if summary else "",
                     "json_format": json_format,
                     "validation_report": validation_report,
+                    "organism": organism,
                     "source": "annotation database"
                 }
 
@@ -681,6 +684,7 @@ class AiAssistance:
             text_content = annotation_resp.get("text") or annotation_resp.get("summary") or ""
             json_format = annotation_resp.get("json_format")
             validation_report = annotation_resp.get("validation_report", {})
+            organism = annotation_resp.get("organism", "human")
 
             # When the pipeline returns json_format but no text (e.g. Cypher execution
             # commented out), build the validation/substitution text from the json_format
@@ -773,7 +777,8 @@ class AiAssistance:
             return {
                 "response": {
                     "text": self._build_annotation_text(json_format),
-                    "json_format": json_format
+                    "json_format": json_format,
+                    "organism": organism
                 }
             }
 
@@ -817,7 +822,8 @@ class AiAssistance:
             return {
                 "response": {
                     "text": aggregated_text,
-                    "json_format": json_format
+                    "json_format": json_format,
+                    "organism": organism
                 },
                 "resource": resource_to_save
             }
@@ -833,13 +839,14 @@ class AiAssistance:
                 if content:
                     content_str = content.strip() if isinstance(content, str) else str(content)
                     fallback_parts.append(f"**From {output.get('source', 'unknown')}:**\n{content_str}")
-           
+
             fallback_text = "\n\n".join(fallback_parts) if fallback_parts else "Annotation data retrieved."
 
             return {
                 "response": {
                     "text": fallback_text,
-                    "json_format": json_format
+                    "json_format": json_format,
+                    "organism": organism
                 },
                 "resource": resource_to_save
             }

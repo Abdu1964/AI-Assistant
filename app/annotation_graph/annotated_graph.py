@@ -9,11 +9,13 @@ from app.llm_handle.llm_models import LLMInterface
 from app.prompts.annotation_prompts import (
     EXTRACT_RELEVANT_INFORMATION_PROMPT,
     JSON_CONVERSION_PROMPT,
+    ORGANISM_DETECTION_PROMPT,
     SELECT_PROPERTY_VALUE_PROMPT,
     SELECT_PROPERTY_VALUES_BATCH_PROMPT,
     RESULT_SUMMARIZATION_PROMPT,
 )
 from app.socket_manager import emit_to_user
+from app.storage.redis import redis_manager
 from .json_to_cypher import JsonToCypherConverter
 
 
@@ -26,19 +28,28 @@ load_dotenv()
 
 
 class Graph:
-    def __init__(self, llm: LLMInterface, schema_handler: SchemaHandler) -> None:
+    def __init__(self, llm: LLMInterface, schema_handler: SchemaHandler, fly_schema_handler: SchemaHandler = None) -> None:
         self.llm = llm
         self.schema_handler = schema_handler
-        self.enhanced_schema = (
-            schema_handler.enhanced_schema
-        )  # Enhanced or preprocessed schema
+        self.enhanced_schema = schema_handler.enhanced_schema
         self.neo4j = Neo4jConnection(
             uri=os.getenv("NEO4J_URI"),
             username=os.getenv("NEO4J_USERNAME"),
             password=os.getenv("NEO4J_PASSWORD"),
         )
-        # In-memory pending annotation confirmations: {user_id: pending_json}
-        self._pending_confirmations: dict = {}
+
+        # Fly organism resources (schema + separate Neo4j connection)
+        self.fly_schema_handler = fly_schema_handler
+        self.fly_enhanced_schema = fly_schema_handler.enhanced_schema if fly_schema_handler else None
+        self.fly_neo4j = Neo4jConnection(
+            uri=os.getenv("FLY_NEO4J_URI"),
+            username=os.getenv("FLY_NEO4J_USERNAME"),
+            password=os.getenv("FLY_NEO4J_PASSWORD"),
+        ) if os.getenv("FLY_NEO4J_URI") else None
+        # Pending annotation confirmations — Redis-backed (cross-process), in-memory fallback
+        self._redis = redis_manager
+        self._pending_fallback: dict = {}  # used only when Redis is unavailable
+        self._PENDING_TTL = 600  # 10 minutes
 
         # Maps node type → the Neo4j property to use when searching by the JSON `id` field
         self._node_id_property = {
@@ -115,6 +126,7 @@ class Graph:
             return {
                 "text": None,
                 "json_format": initial_json,
+                "organism": "human",
                 "resource": {"id": None, "type": "annotation"},
             }
 
@@ -128,6 +140,7 @@ class Graph:
         return {
             "text": None,
             "json_format": validated_json,
+            "organism": "human",
             "resource": {"id": None, "type": "annotation"},
         }
 
@@ -153,11 +166,24 @@ class Graph:
                 "text": f"I apologize, but I wasn't able to generate the graph you requested. Could you please rephrase your question or provide additional details so I can better understand what you're looking for?"
             }
 
-    def _extract_relevant_information(self, query):
+    def _detect_organism(self, query) -> str:
+        try:
+            prompt = ORGANISM_DETECTION_PROMPT.format(query=query)
+            result = self.llm.generate(prompt)
+            organism = str(result).strip().lower()
+            if "fly" in organism:
+                return "fly"
+            return "human"
+        except Exception as e:
+            logger.warning(f"Organism detection failed, defaulting to human: {e}")
+            return "human"
+
+    def _extract_relevant_information(self, query, enhanced_schema=None):
         try:
             logger.info("Extracting relevant information from the query.")
+            schema = enhanced_schema if enhanced_schema is not None else self.enhanced_schema
             prompt = EXTRACT_RELEVANT_INFORMATION_PROMPT.format(
-                schema=self.enhanced_schema, query=query
+                schema=schema, query=query
             )
             extracted_info = self.llm.generate(prompt)
             logger.info(f"Extracted data: \n{extracted_info}")
@@ -166,13 +192,14 @@ class Graph:
             logger.error(f"Failed to extract relevant information: {e}")
             raise
 
-    def _convert_to_annotation_json(self, relevant_information, query):
+    def _convert_to_annotation_json(self, relevant_information, query, enhanced_schema=None):
         try:
             logger.info("Converting relevant information to annotation JSON format.")
+            schema = enhanced_schema if enhanced_schema is not None else self.enhanced_schema
             prompt = JSON_CONVERSION_PROMPT.format(
                 query=query,
                 extracted_information=relevant_information,
-                schema=self.enhanced_schema,
+                schema=schema,
             )
             json_data = self.llm.generate(prompt)
             logger.info(f"Converted JSON:\n{json.dumps(json_data, indent=2)}")
@@ -181,9 +208,11 @@ class Graph:
             logger.error(f"Failed to convert information to annotation JSON: {e}")
             raise
 
-    def _validate_and_update(self, initial_json):
+    def _validate_and_update(self, initial_json, neo4j=None, schema_handler=None):
         try:
             logger.info("Validating and updating the JSON structure.")
+            _neo4j = neo4j if neo4j is not None else self.neo4j
+            _schema_handler = schema_handler if schema_handler is not None else self.schema_handler
             node_types = {}
             validation_report = {
                 "property_changes": [],
@@ -229,7 +258,7 @@ class Graph:
             # Run one batch Neo4j query per (node_type, property_key)
             similarity_cache = {}  # (node_type, property_key, value) -> [(similar_value, score), ...]
             for (node_type, property_key), values in lookup_needed.items():
-                batch = self.neo4j.get_similar_property_values_batch(node_type, property_key, list(values))
+                batch = _neo4j.get_similar_property_values_batch(node_type, property_key, list(values))
                 for value, matches in batch.items():
                     similarity_cache[(node_type, property_key, value)] = matches
 
@@ -425,11 +454,11 @@ class Graph:
                 rel = edge["type"]
                 conn = f"{s}-{rel}-{t}"
 
-                if conn in self.schema_handler.processed_schema:
+                if conn in _schema_handler.processed_schema:
                     valid_predicates.append(edge)
                 else:
                     rev = f"{t}-{rel}-{s}"
-                    if rev in self.schema_handler.processed_schema:
+                    if rev in _schema_handler.processed_schema:
                         # Swap direction and keep
                         validation_report["direction_changes"].append(
                             {"relation_type": rel, "original": f"{s} → {t}", "corrected": f"{t} → {s}"}
@@ -459,6 +488,7 @@ class Graph:
             return {
                 "updated_json": updated_json,
                 "validation_report": validation_report,
+                "candidates": batch_for_llm,  # {item: [(candidate, score), ...]}
             }
 
         except Exception as e:
@@ -468,6 +498,7 @@ class Graph:
             return {
                 "updated_json": initial_json,
                 "validation_report": validation_report,
+                "candidates": {},
             }
 
     def _select_best_matching_property_value(self, user_input_value, possible_values):
@@ -509,73 +540,122 @@ class Graph:
             return out
         return {item: None for item in items_with_candidates}
 
+    # ── Pending state helpers (Redis-backed, in-memory fallback) ─────────────
+
+    def _set_pending(self, user_id: str, data: dict):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            self._redis.client.set(key, json.dumps(data), ex=self._PENDING_TTL)
+        else:
+            self._pending_fallback[user_id] = data
+
+    def _get_pending(self, user_id: str):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            raw = self._redis.client.get(key)
+            return json.loads(raw) if raw else None
+        return self._pending_fallback.get(user_id)
+
+    def _clear_pending(self, user_id: str):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            self._redis.client.delete(key)
+        else:
+            self._pending_fallback.pop(user_id, None)
+
     # ── Confirmation flow ─────────────────────────────────────────────────────
 
     def has_pending_for(self, user_id: str) -> bool:
-        return user_id in self._pending_confirmations
+        return self._get_pending(user_id) is not None
 
     def handle_confirmation_response(self, user_id: str, query: str):
         """Call from assistant_response when a pending confirmation exists.
         Returns a ready response dict, or None if query is a new unrelated question.
         """
-        pending = self._pending_confirmations.get(user_id)
-        if not pending:
+        entry = self._get_pending(user_id)
+        if not entry:
             return None
+
+        pending_json = entry["json"]
+        candidates  = entry.get("candidates", {})
+        unconfirmed = entry.get("unconfirmed", [])
+        pending_organism = entry.get("organism", "human")
+
         verdict = self._classify_confirmation(query)
+
         if verdict == "confirm":
-            resolved = self._apply_pending_substitutions(pending, apply=True)
-            del self._pending_confirmations[user_id]
+            resolved = self._apply_pending_substitutions(pending_json, apply=True)
+            self._clear_pending(user_id)
             return {
                 "text": "Got it! I've built the annotation structure using the confirmed match. The structured data is ready.",
                 "json_format": resolved,
+                "organism": pending_organism,
                 "agents_completed": ["annotation_agent"],
             }
+
         if verdict == "reject":
-            resolved = self._apply_pending_substitutions(pending, apply=False)
-            del self._pending_confirmations[user_id]
+            resolved = self._apply_pending_substitutions(pending_json, apply=False)
+            self._clear_pending(user_id)
             return {
                 "text": "Understood! I've built the annotation structure without the unidentified node. The structured data is ready.",
                 "json_format": resolved,
+                "organism": pending_organism,
                 "agents_completed": ["annotation_agent"],
             }
+
+        if verdict == "show_alternatives":
+            # Show the other Neo4j candidates — keep pending active so user can still confirm/reject
+            lines = []
+            for u in unconfirmed:
+                original  = u["original"]
+                all_cands = candidates.get(original, [])
+                # Skip the already-suggested top hit; show the rest
+                suggestion = u["suggestion"]
+                others = [(v, s) for v, s in all_cands if v != suggestion]
+                if others:
+                    others_str = ", ".join(f"**{v}** ({round(s*100)}% similar)" for v, s in others[:4])
+                    lines.append(
+                        f"Other candidates for **'{original}'** in the database: {others_str}.\n"
+                        f"The closest remains **'{suggestion}'**. "
+                        f"Reply with the name you'd like to use, or say **yes** to use '{suggestion}', "
+                        f"or **no** to build without it."
+                    )
+                else:
+                    lines.append(
+                        f"There are no other similar entries for **'{original}'** in the database. "
+                        f"The only close match is **'{suggestion}'**. "
+                        f"Say **yes** to use it or **no** to build without it."
+                    )
+            return {
+                "text": "\n\n".join(lines),
+                "json_format": None,
+                "agents_completed": ["annotation_agent"],
+            }
+
         # New unrelated query — clear stale state and proceed normally
-        del self._pending_confirmations[user_id]
+        self._clear_pending(user_id)
         return None
 
     def _classify_confirmation(self, message: str) -> str:
-        """Returns 'confirm', 'reject', or 'new_query'.
-        Fast-paths obvious yes/no before calling the LLM.
-        """
-        msg = message.strip().lower().rstrip(".!,")
-
-        _CONFIRMS = {"yes", "yeah", "yep", "yup", "yap", "sure", "ok", "okay", "y",
-                     "correct", "go ahead", "proceed", "use it", "use that", "do it",
-                     "confirm", "sounds good", "that's fine", "go for it", "sure thing",
-                     "let's go", "absolutely", "definitely", "of course", "please do"}
-        _REJECTS  = {"no", "nope", "n", "nah", "skip", "without", "exclude", "don't",
-                     "cancel", "build without", "leave it out", "drop it", "ignore it",
-                     "don't use", "dont use", "without it", "not needed"}
-
-        if msg in _CONFIRMS or any(msg.startswith(c + " ") for c in _CONFIRMS):
-            return "confirm"
-        if msg in _REJECTS or any(msg.startswith(r + " ") for r in _REJECTS):
-            return "reject"
-
-        # Ambiguous — ask the LLM
+        """Uses the LLM to understand what the user meant — no keyword matching."""
         prompt = (
-            f"The assistant asked a yes/no confirmation question about substituting an "
-            f"unrecognized database entry with a suggested match. The user replied:\n\n"
+            f"The assistant asked the user to confirm whether to substitute an unrecognised "
+            f"database entry with a suggested match. The user replied:\n\n"
             f"\"{message}\"\n\n"
-            f"Classify the reply as exactly one of:\n"
-            f"- confirm   (user agrees to use the suggested match)\n"
-            f"- reject    (user wants to skip/exclude it and build without it)\n"
-            f"- new_query (user is asking something completely unrelated)\n\n"
-            f"Reply with only one word: confirm, reject, or new_query."
+            f"Classify the user's intent as exactly one of:\n"
+            f"- confirm           — user agrees to use the suggested match "
+            f"(e.g. 'yes', 'sure', 'use it', 'go ahead', 'that works', 'use ZNF697')\n"
+            f"- reject            — user wants to build without the unidentified node "
+            f"(e.g. 'no', 'skip it', 'build without', 'leave it out')\n"
+            f"- show_alternatives — user wants to see other possible matches from the database "
+            f"(e.g. 'find another', 'show me others', 'what else is there', 'forgot the name')\n"
+            f"- new_query         — user is asking something completely unrelated to the confirmation\n\n"
+            f"Reply with only one word: confirm, reject, show_alternatives, or new_query."
         )
         try:
             result = self.llm.generate(prompt)
             verdict = result.strip().lower().split()[0] if result else "new_query"
-            return verdict if verdict in ("confirm", "reject", "new_query") else "new_query"
+            return verdict if verdict in ("confirm", "reject", "show_alternatives", "new_query") else "new_query"
         except Exception:
             return "new_query"
 
@@ -586,6 +666,17 @@ class Graph:
                 continue
             if apply:
                 subs = node["pending_substitutions"]
+
+                # Handle id-field substitution: move result to the correct property
+                node_id_val = node.get("id", "")
+                if node_id_val and node_id_val in subs:
+                    suggested = subs[node_id_val]
+                    id_prop = self._node_id_property.get(node.get("type", "").lower())
+                    if id_prop:
+                        node.setdefault("properties", {})[id_prop] = suggested
+                    node["id"] = ""
+
+                # Handle property-value substitutions
                 for prop_key, prop_val in node.get("properties", {}).items():
                     if not isinstance(prop_val, str):
                         continue
@@ -643,6 +734,50 @@ class Graph:
                     pred["target"] = removed[pred["target"]]
 
         return kept
+
+    def _describe_annotation_result(self, query: str, validated_json: dict) -> str:
+        """Generate a meaningful biological description from the query + validated JSON.
+        Replaces the generic 'structure created successfully' text so the aggregator
+        has real content to work with instead of hallucinating.
+        """
+        try:
+            nodes = validated_json.get("nodes", [])
+            predicates = validated_json.get("predicates", [])
+
+            node_id_to_label = {}
+            node_lines = []
+            for n in nodes:
+                nid  = n.get("node_id", "")
+                ntype = n.get("type", "unknown")
+                props = n.get("properties", {})
+                prop_str = ", ".join(f"{k}: {v}" for k, v in props.items()) if props else "(no properties)"
+                node_lines.append(f"- {ntype} [{nid}]: {prop_str}")
+                node_id_to_label[nid] = f"{ntype}({prop_str})"
+
+            pred_lines = []
+            for p in predicates:
+                src = node_id_to_label.get(p.get("source", ""), p.get("source", ""))
+                tgt = node_id_to_label.get(p.get("target", ""), p.get("target", ""))
+                pred_lines.append(f"- {src} --[{p.get('type', '')}]--> {tgt}")
+
+            structure_summary = "Nodes:\n" + "\n".join(node_lines)
+            if pred_lines:
+                structure_summary += "\n\nRelationships:\n" + "\n".join(pred_lines)
+
+            prompt = (
+                f"A user asked: \"{query}\"\n\n"
+                f"The following annotation structure was built from the database schema:\n\n"
+                f"{structure_summary}\n\n"
+                f"Write 1-3 sentences describing what this structure represents biologically "
+                f"and what query it will run. Be specific about the entities and relationships "
+                f"involved. Do NOT invent data, relationships, or biological facts not shown above. "
+                f"Do NOT mention the annotation system or technical details."
+            )
+            result = self.llm.generate(prompt)
+            return result.strip() if result else "The annotation structure was built successfully."
+        except Exception as e:
+            logger.warning(f"Failed to generate annotation description: {e}")
+            return "The annotation structure was built successfully."
 
     def _build_confirmation_text(self, unconfirmed_nodes: list) -> str:
         if len(unconfirmed_nodes) == 1:
@@ -930,13 +1065,27 @@ class Graph:
 
     def _handle_biological_query(self, query, user_id):
         try:
+            # Detect organism and select the right schema + Neo4j resources
+            organism = self._detect_organism(query)
+            if organism == "fly" and self.fly_schema_handler and self.fly_neo4j:
+                active_schema = self.fly_enhanced_schema
+                active_schema_handler = self.fly_schema_handler
+                active_neo4j = self.fly_neo4j
+                logger.info("Organism detected: fly — using fly schema and Neo4j")
+            else:
+                organism = "human"
+                active_schema = self.enhanced_schema
+                active_schema_handler = self.schema_handler
+                active_neo4j = self.neo4j
+                logger.info("Organism detected: human — using human schema and Neo4j")
+
             # Extract and validate JSON query
             emit_to_user(
                 user=user_id,
                 message="Extracting relevant information from your query...",
             )
             try:
-                relevant_information = self._extract_relevant_information(query)
+                relevant_information = self._extract_relevant_information(query, enhanced_schema=active_schema)
                 logger.info("Relevant information extraction successful")
 
                 # Convert to initial JSON
@@ -944,12 +1093,12 @@ class Graph:
                     user=user_id, message="Validating Constructed Json Format..."
                 )
                 initial_json = self._convert_to_annotation_json(
-                    relevant_information, query
+                    relevant_information, query, enhanced_schema=active_schema
                 )
                 logger.info("Initial JSON conversion successful")
 
                 # Validate and update
-                validation = self._validate_and_update(initial_json)
+                validation = self._validate_and_update(initial_json, neo4j=active_neo4j, schema_handler=active_schema_handler)
                 logger.info("JSON validation successful")
 
                 # Collect nodes that need user confirmation before the JSON can be finalised
@@ -967,7 +1116,12 @@ class Graph:
 
                 if unconfirmed_nodes:
                     logger.info(f"Returning needs_confirmation for {len(unconfirmed_nodes)} node(s)")
-                    self._pending_confirmations[user_id] = validation["updated_json"]
+                    self._set_pending(user_id, {
+                        "json": validation["updated_json"],
+                        "candidates": validation.get("candidates", {}),
+                        "unconfirmed": unconfirmed_nodes,
+                        "organism": organism,
+                    })
                     return {
                         "success": True,
                         "needs_confirmation": True,
@@ -978,10 +1132,14 @@ class Graph:
                         "resource": {"id": None, "type": "annotation"},
                     }
 
+                summary = self._describe_annotation_result(query, validation["updated_json"])
+
+                updated_json = validation["updated_json"]
                 json_query = {
                     "success": True,
-                    "summary": None,
-                    "json_format": validation["updated_json"],
+                    "summary": summary,
+                    "json_format": updated_json,
+                    "organism": organism,
                     "validation_report": validation["validation_report"],
                     "resource": {"id": None, "type": "annotation"},
                 }

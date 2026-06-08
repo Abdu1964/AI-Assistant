@@ -1,0 +1,314 @@
+### Schema (Drosophila melanogaster — fly):
+
+#### Node Properties:
+- **gene**
+  - `id`: STRING Example: "fbgn0000490" — FlyBase gene ID (lowercase), use for querying by database ID
+  - `gene_name`: STRING Example: "brca2" — use for querying by gene name (Drosophila names are typically lowercase)
+  - `gene_type`: STRING Example: "protein_coding"
+  - `synonym`: STRING Example: '["CG7729", "Dmel\\brca2"]'
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 12345678
+  - `end`: INTEGER Example: 12360000
+  - `source`: STRING Example: "FlyBase"
+  - `source_url`: STRING Example: "https://flybase.org/"
+
+- **transcript**
+  - `id`: STRING Example: "fbt00000001" — FlyBase transcript ID (lowercase)
+  - `transcript_id`: STRING Example: "FBtr0000001" — use for querying by transcript ID
+  - `transcript_name`: STRING Example: "brca2-RA" — use for querying by transcript name
+  - `transcript_type`: STRING Example: "protein_coding"
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 12345678
+  - `end`: INTEGER Example: 12360000
+  - `gene_name`: STRING Example: "brca2"
+
+- **exon**
+  - `id`: STRING Example: "fbe00000001" — FlyBase exon ID (lowercase)
+  - `exon_id`: STRING Example: "FBex0000001" — use for querying by exon ID
+  - `exon_number`: INTEGER Example: 3
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 12345678
+  - `end`: INTEGER Example: 12346000
+  - `transcript_id`: STRING Example: "FBtr0000001"
+  - `gene_id`: STRING Example: "FBgn0000490"
+
+- **protein**
+  - `id`: STRING Example: "p12345" — UniProt accession (lowercase)
+  - `protein_name`: STRING Example: "BRCA2"
+  - `accessions`: STRING Example: '["Q9GYN8"]'
+  - `is_canonical`: BOOLEAN Example: true
+  - `is_isoform`: BOOLEAN Example: false
+  - `canonical_accession`: STRING Example: "Q9GYN8"
+  - `source`: STRING Example: "UniProt"
+  - `source_url`: STRING Example: "https://www.uniprot.org/"
+
+- **allele**
+  - `id`: STRING Example: "fbal0000001" — FlyBase allele ID (lowercase)
+  - `allele_symbol`: STRING Example: "brca2[P1]" — use for querying by allele symbol
+  - `taxon_id`: INTEGER Example: 7227
+
+- **dmel_disease_model**
+  - `id`: STRING Example: "fbdm0000001"
+  - `gene`: STRING Example: "brca2"
+  - `do_term_id`: STRING Example: "DOID:1612"
+  - `do_term_name`: STRING Example: "breast cancer" — use for querying by disease name
+  - `ortholog_hgnc_symbol`: STRING Example: "BRCA2"
+  - `taxon_id`: INTEGER Example: 7227
+
+- **gene_group**
+  - `id`: STRING Example: "fbgg0000001"
+  - `group_symbol`: STRING Example: "BRCA" — use for querying by group symbol
+  - `group_name`: STRING Example: "BRCA DNA repair genes" — use for querying by group name
+  - `taxon_id`: INTEGER Example: 7227
+
+- **genotype**
+  - `id`: STRING Example: "fbgeno0000001"
+  - `genotype_ids`: STRING Example: "FBgn0000490[P1]/+" — use for querying
+  - `genotype_symbols`: STRING Example: "brca2[P1]/+"
+  - `taxon_id`: INTEGER Example: 7227
+
+- **phenotype_set**
+  - `id`: STRING Example: "fbpheno0000001"
+  - `phenotype_ontology_id`: STRING Example: "FBcv:0000001"
+  - `taxon_id`: INTEGER Example: 7227
+
+- **metabolic_pathway_gene_group**
+  - `id`: STRING Example: "fbmg0000001"
+  - `group_symbol`: STRING Example: "GLYCOLYSIS"
+  - `group_name`: STRING Example: "Glycolysis pathway genes" — use for querying by name
+  - `taxon_id`: INTEGER Example: 7227
+
+- **signaling_pathway_gene_group**
+  - `id`: STRING Example: "fbsg0000001"
+  - `group_symbol`: STRING Example: "WNT"
+  - `group_name`: STRING Example: "Wnt signaling pathway genes" — use for querying by name
+  - `taxon_id`: INTEGER Example: 7227
+
+- **rnaseq_library**
+  - `id`: STRING Example: "fbrl0000001"
+  - `name`: STRING Example: "GSE12345_lib1" — use for querying by library name
+  - `tissue_info`: STRING Example: '["embryo", "larva"]'
+  - `source`: STRING Example: "FlyBase"
+  - `taxon_id`: INTEGER Example: 7227
+
+- **promoter**
+  - `id`: STRING Example: "chr3L_12345000_12345300_dm6"
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 12345000
+  - `end`: INTEGER Example: 12345300
+  - `taxon_id`: STRING Example: "7227"
+
+- **enhancer**
+  - `id`: STRING Example: "chr3L_12383001_12383360_dm6"
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 12383001
+  - `end`: INTEGER Example: 12383360
+  - `enhancer_id`: STRING Example: "EH_dmel_001"
+  - `taxon_id`: STRING Example: "7227"
+
+- **regulatory_region**
+  - `id`: STRING Example: "chr3L_12345000_12345300_dm6"
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 12345000
+  - `end`: INTEGER Example: 12345300
+  - `cell`: STRING Example: "S2"
+  - `biochemical_activity`: STRING Example: "H3K27ac"
+
+- **pathway**
+  - `id`: STRING Example: "r-dme-164843"
+  - `pathway_name`: STRING Example: "Wnt signaling pathway"
+  - `source`: STRING Example: "Reactome"
+
+- **biological_process**
+  - `id`: STRING Example: "go_0007049"
+  - `term_name`: STRING Example: "cell cycle"
+  - `synonym`: STRING Example: '["mitotic cell cycle"]'
+
+- **molecular_function**
+  - `id`: STRING Example: "go_0003677"
+  - `term_name`: STRING Example: "DNA binding"
+  - `synonym`: STRING Example: '["nucleic acid binding"]'
+
+- **cellular_component**
+  - `id`: STRING Example: "go_0005634"
+  - `term_name`: STRING Example: "nucleus"
+  - `synonym`: STRING Example: '["cell nucleus"]'
+
+- **anatomy**
+  - `id`: STRING Example: "fbbt_00003109" — FlyBase anatomy term (FBbt)
+  - `term_name`: STRING Example: "wing disc" — use for querying by anatomical structure name
+  - `synonym`: STRING Example: '["imaginal disc"]'
+
+- **tissue**
+  - `id`: STRING Example: "bto_0000567"
+  - `term_name`: STRING Example: "fat body"
+  - `synonym`: STRING Example: '[]'
+
+- **cell_type**
+  - `id`: STRING Example: "cl_0000057"
+  - `term_name`: STRING Example: "hemocyte"
+  - `synonym`: STRING Example: '["blood cell"]'
+
+- **cell_line**
+  - `id`: STRING Example: "clo_0016338"
+  - `term_name`: STRING Example: "S2 cell"
+  - `synonym`: STRING Example: '[]'
+
+- **disease**
+  - `id`: STRING Example: "doid_1612"
+  - `term_name`: STRING Example: "breast cancer"
+  - `synonym`: STRING Example: '[]'
+
+- **phenotype**
+  - `id`: STRING Example: "fbcv_0000001" — FlyBase controlled vocabulary
+  - `term_name`: STRING Example: "lethal"
+  - `synonym`: STRING Example: '[]'
+
+- **developmental_stage**
+  - `id`: STRING Example: "fbdv_00005289" — FlyBase developmental stage (FBdv)
+  - `term_name`: STRING Example: "embryonic stage 5"
+  - `synonym`: STRING Example: '[]'
+
+- **small_molecule**
+  - `id`: STRING Example: "chebi_15422"
+  - `term_name`: STRING Example: "ATP"
+  - `synonym`: STRING Example: '["adenosine triphosphate"]'
+
+- **sequence_variant**
+  - `id`: STRING Example: "rs121912431"
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 12345000
+  - `rsid`: STRING Example: "rs121912431"
+
+- **structural_variant**
+  - `id`: STRING Example: "chr3L_10002_22118_dm6"
+  - `chr`: STRING Example: "chr3L"
+  - `variant_type`: STRING Example: "deletion"
+
+- **non_coding_rna**
+  - `id`: STRING Example: "urs000035f234"
+  - `chr`: STRING Example: "chr3L"
+  - `rna_type`: STRING Example: "miRNA"
+
+- **tfbs**
+  - `id`: STRING Example: "chr3L_904520_905085_dm6"
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 904520
+  - `end`: INTEGER Example: 905085
+
+- **motif**
+  - `id`: STRING Example: "hocomoco_brca2"
+  - `tf_name`: STRING Example: "brca2"
+  - `source`: STRING Example: "HOCOMOCO"
+
+- **tad**
+  - `id`: STRING Example: "chr3L_111750000_113000000_dm6"
+  - `chr`: STRING Example: "chr3L"
+  - `start`: INTEGER Example: 111750000
+  - `end`: INTEGER Example: 113000000
+
+- **reaction**
+  - `id`: STRING Example: "r-dme-140342"
+  - `reaction_name`: STRING Example: "Wnt ligand secretion"
+  - `source`: STRING Example: "Reactome"
+
+- **molecular_interaction**
+  - `id`: STRING Example: "mi_0915"
+  - `term_name`: STRING Example: "physical association"
+
+Note
+- Drosophila gene names are typically lowercase (e.g., brca2, p53, Rb, E2f1, dp, hh, wg, dpp)
+- FlyBase IDs use prefixes: FBgn (gene), FBtr (transcript), FBal (allele), FBbt (anatomy), FBdv (developmental stage), FBcv (phenotype controlled vocabulary)
+- Transcription factors have label `gene`
+- anatomy = FlyBase anatomy ontology (FBbt); tissue = BRENDA Tissue Ontology (BTO)
+- cell_type = Cell Ontology (CL); cell_line = Cell Line Ontology (CLO)
+- biological_process / molecular_function / cellular_component = Gene Ontology (GO)
+- disease = Disease Ontology; phenotype = FlyBase controlled vocabulary (FBcv)
+- taxon_id for Drosophila melanogaster = 7227
+
+#### Relationships:
+(:gene)-[:transcribes_to]->(:transcript)
+(:gene)-[:regulates]->(:gene)
+(:gene)-[:gene_genetic_association]->(:gene)
+(:gene)-[:participates_in]->(:pathway)
+(:gene)-[:involved_in]->(:biological_process)
+(:gene)-[:located_in]->(:cellular_component)
+(:gene)-[:part_of]->(:cellular_component)
+(:gene)-[:enables]->(:molecular_function)
+(:gene)-[:expressed_in]->(:anatomy)
+(:gene)-[:expressed_in]->(:tissue)
+(:gene)-[:expressed_in]->(:cell_type)
+(:gene)-[:expressed_in]->(:cell_line)
+(:gene)-[:associated_with]->(:disease)
+(:gene)-[:involved_in]->(:phenotype)
+(:gene)-[:ortholog_of]->(:gene)
+(:gene)-[:coexpressed_with]->(:gene)
+(:gene)-[:in_tad_region]->(:tad)
+(:gene)-[:binds_to]->(:tfbs)
+(:gene)-[:overlaps]->(:structural_variant)
+(:gene)-[:grouped_into]->(:gene_group)
+(:gene)-[:metabolic_pathway_grouped_into]->(:metabolic_pathway_gene_group)
+(:gene)-[:signaling_pathway_grouped_into]->(:signaling_pathway_gene_group)
+(:gene)-[:has_phenotype]->(:disease)
+(:gene)-[:models]->(:dmel_disease_model)
+(:transcript)-[:transcribed_from]->(:gene)
+(:transcript)-[:translates_to]->(:protein)
+(:transcript)-[:participates_in]->(:pathway)
+(:exon)-[:part_of]->(:transcript)
+(:exon)-[:part_of]->(:gene)
+(:protein)-[:translation_of]->(:transcript)
+(:protein)-[:interacts_with]->(:protein)
+(:protein)-[:physically_interacts_with]->(:protein)
+(:protein)-[:physically_interacts_with]->(:transcript)
+(:protein)-[:participates_in]->(:pathway)
+(:protein)-[:involved_in]->(:biological_process)
+(:protein)-[:located_in]->(:cellular_component)
+(:protein)-[:enables]->(:molecular_function)
+(:protein)-[:regulates]->(:pathway)
+(:protein)-[:regulates]->(:reaction)
+(:protein)-[:negatively_regulates]->(:pathway)
+(:protein)-[:positively_regulates]->(:pathway)
+(:allele)-[:variant_of]->(:gene)
+(:allele)-[:involved_in]->(:phenotype_set)
+(:allele)-[:interacts_with]->(:allele)
+(:phenotype_set)-[:inheres_in]->(:cellular_component)
+(:phenotype_set)-[:genetically_inferred_from]->(:genotype)
+(:phenotype_set)-[:characterized_by]->(:ontology_term)
+(:enhancer)-[:associated_with]->(:gene)
+(:enhancer)-[:activity_by_contact]->(:gene)
+(:promoter)-[:associated_with]->(:gene)
+(:regulatory_region)-[:regulates]->(:gene)
+(:cell_type)-[:part_of]->(:anatomy)
+(:cell_type)-[:is_a]->(:cell_type)
+(:anatomy)-[:is_a]->(:anatomy)
+(:tissue)-[:part_of]->(:anatomy)
+(:biological_process)-[:is_a]->(:biological_process)
+(:molecular_function)-[:is_a]->(:molecular_function)
+(:cellular_component)-[:is_a]->(:cellular_component)
+(:disease)-[:is_a]->(:disease)
+(:phenotype)-[:is_a]->(:phenotype)
+(:developmental_stage)-[:is_a]->(:developmental_stage)
+(:pathway)-[:child_pathway_of]->(:pathway)
+(:reaction)-[:part_of]->(:pathway)
+(:non_coding_rna)-[:participates_in]->(:biological_process)
+(:non_coding_rna)-[:enables]->(:molecular_function)
+(:non_coding_rna)-[:overlaps]->(:structural_variant)
+(:small_molecule)-[:participates_in]->(:pathway)
+(:structural_variant)-[:overlaps]->(:gene)
+(:structural_variant)-[:overlaps]->(:non_coding_rna)
+(:structural_variant)-[:overlaps]->(:promoter)
+
+#### Important Rules:
+1. **Database ID vs Property Value:**
+   - `id` field: ONLY use for actual database identifiers (lowercase FlyBase IDs like "fbgn0000490")
+   - `properties`: Use for searchable values (gene names, allele symbols, term names)
+
+2. **Drosophila gene naming:**
+   - Fly gene names are typically lowercase (brca2, p53, Rb, E2f1, dp, wg, hh, dpp)
+   - FlyBase IDs start with FBgn (genes), FBal (alleles), FBtr (transcripts)
+
+3. **Examples:**
+   - "Find gene brca2" → `properties: {"gene_name": "brca2"}`, `id: ""`
+   - "Find gene FBgn0000490" → `id: "fbgn0000490"`, `properties: {}`
+   - "Find allele brca2[P1]" → `properties: {"allele_symbol": "brca2[P1]"}`, `id: ""`
+   - "Find anatomy wing disc" → `properties: {"term_name": "wing disc"}`, `id: ""`
