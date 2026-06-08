@@ -11,8 +11,8 @@ WORKDIR /AI-Assistant
 # Create log directory here
 RUN mkdir -p /AI-Assistant/logfiles
 
-# Install Poetry
-RUN pip install poetry
+# Install Poetry (explicitly upgrade wheel to fix CVE-2026-24049)
+RUN pip install --upgrade pip "wheel>=0.46.2" poetry
 
 # Copy the application code
 COPY . /AI-Assistant
