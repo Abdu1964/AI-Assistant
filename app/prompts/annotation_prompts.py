@@ -1,3 +1,26 @@
+ORGANISM_DETECTION_PROMPT = """You are a biological query classifier. Determine whether the following query is about human biology or Drosophila melanogaster (fruit fly) biology.
+
+Answer "fly" ONLY when there is a clear, unambiguous signal. Default to "human" whenever you are uncertain.
+
+Signals that mean FLY (high confidence):
+- Explicit organism words: "Drosophila", "dmel", "fruit fly", "fly", "melanogaster"
+- FlyBase identifiers: FBgn, FBal, FBtr, FBbt, FBdv (e.g. "FBgn0000490")
+- Fly-exclusive gene names that do not exist in human: wg, hh, dpp, en, eve, ftz, vg, arm, sev, boss, Dl, N (Notch fly symbol)
+- Fly anatomy terms: "wing disc", "imaginal disc", "ommatidia", "fat body", "bristle", "salivary gland polytene"
+- Fly allele notation: gene symbols with bracket suffixes like brca2[P1], w[1118], p53[A]
+- Fly developmental stages: "larval stage", "pupal stage", "embryonic stage 5", "wandering larva"
+
+Default to "human" when:
+- The organism is not mentioned at all
+- Gene names are ambiguous (e.g. p53, Rb, E2f — exist in both organisms)
+- Only general biology terms are used (pathway, disease, cell type, tissue)
+- Any doubt exists
+
+Query: {query}
+
+Respond with ONLY one word: "human" or "fly". No explanation.
+"""
+
 EXTRACT_RELEVANT_INFORMATION_PROMPT = """
 ## TASK:
 Let's think step by step to extract the relevant information needed to build the query based on the schema.

@@ -84,13 +84,14 @@ class AiAssistance:
         advanced_llm,
         basic_llm,
         schema_handler,
+        fly_schema_handler=None,
         qdrant_client=None,
         embedding_model=None,
         mongo_db_manager=None,
     ) -> None:
         self.advanced_llm = advanced_llm
         self.basic_llm = basic_llm
-        self.annotation_graph = Graph(advanced_llm, schema_handler)
+        self.annotation_graph = Graph(advanced_llm, schema_handler, fly_schema_handler=fly_schema_handler)
         self.graph_summarizer = Graph_Summarizer(self.advanced_llm)
         self.rag = RAG(llm=advanced_llm, qdrant_client=qdrant_client)
         self.store = mongo_db_manager
