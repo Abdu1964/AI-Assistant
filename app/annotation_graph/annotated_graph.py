@@ -9,6 +9,7 @@ from app.llm_handle.llm_models import LLMInterface
 from app.prompts.annotation_prompts import (
     EXTRACT_RELEVANT_INFORMATION_PROMPT,
     JSON_CONVERSION_PROMPT,
+    ORGANISM_DETECTION_PROMPT,
     SELECT_PROPERTY_VALUE_PROMPT,
     SELECT_PROPERTY_VALUES_BATCH_PROMPT,
     RESULT_SUMMARIZATION_PROMPT,
@@ -27,17 +28,24 @@ load_dotenv()
 
 
 class Graph:
-    def __init__(self, llm: LLMInterface, schema_handler: SchemaHandler) -> None:
+    def __init__(self, llm: LLMInterface, schema_handler: SchemaHandler, fly_schema_handler: SchemaHandler = None) -> None:
         self.llm = llm
         self.schema_handler = schema_handler
-        self.enhanced_schema = (
-            schema_handler.enhanced_schema
-        )  # Enhanced or preprocessed schema
+        self.enhanced_schema = schema_handler.enhanced_schema
         self.neo4j = Neo4jConnection(
             uri=os.getenv("NEO4J_URI"),
             username=os.getenv("NEO4J_USERNAME"),
             password=os.getenv("NEO4J_PASSWORD"),
         )
+
+        # Fly organism resources (schema + separate Neo4j connection)
+        self.fly_schema_handler = fly_schema_handler
+        self.fly_enhanced_schema = fly_schema_handler.enhanced_schema if fly_schema_handler else None
+        self.fly_neo4j = Neo4jConnection(
+            uri=os.getenv("FLY_NEO4J_URI"),
+            username=os.getenv("FLY_NEO4J_USERNAME"),
+            password=os.getenv("FLY_NEO4J_PASSWORD"),
+        ) if os.getenv("FLY_NEO4J_URI") else None
         # Pending annotation confirmations — Redis-backed (cross-process), in-memory fallback
         self._redis = redis_manager
         self._pending_fallback: dict = {}  # used only when Redis is unavailable
@@ -118,6 +126,7 @@ class Graph:
             return {
                 "text": None,
                 "json_format": initial_json,
+                "organism": "human",
                 "resource": {"id": None, "type": "annotation"},
             }
 
@@ -131,6 +140,7 @@ class Graph:
         return {
             "text": None,
             "json_format": validated_json,
+            "organism": "human",
             "resource": {"id": None, "type": "annotation"},
         }
 
@@ -156,11 +166,24 @@ class Graph:
                 "text": f"I apologize, but I wasn't able to generate the graph you requested. Could you please rephrase your question or provide additional details so I can better understand what you're looking for?"
             }
 
-    def _extract_relevant_information(self, query):
+    def _detect_organism(self, query) -> str:
+        try:
+            prompt = ORGANISM_DETECTION_PROMPT.format(query=query)
+            result = self.llm.generate(prompt)
+            organism = str(result).strip().lower()
+            if "fly" in organism:
+                return "fly"
+            return "human"
+        except Exception as e:
+            logger.warning(f"Organism detection failed, defaulting to human: {e}")
+            return "human"
+
+    def _extract_relevant_information(self, query, enhanced_schema=None):
         try:
             logger.info("Extracting relevant information from the query.")
+            schema = enhanced_schema if enhanced_schema is not None else self.enhanced_schema
             prompt = EXTRACT_RELEVANT_INFORMATION_PROMPT.format(
-                schema=self.enhanced_schema, query=query
+                schema=schema, query=query
             )
             extracted_info = self.llm.generate(prompt)
             logger.info(f"Extracted data: \n{extracted_info}")
@@ -169,13 +192,14 @@ class Graph:
             logger.error(f"Failed to extract relevant information: {e}")
             raise
 
-    def _convert_to_annotation_json(self, relevant_information, query):
+    def _convert_to_annotation_json(self, relevant_information, query, enhanced_schema=None):
         try:
             logger.info("Converting relevant information to annotation JSON format.")
+            schema = enhanced_schema if enhanced_schema is not None else self.enhanced_schema
             prompt = JSON_CONVERSION_PROMPT.format(
                 query=query,
                 extracted_information=relevant_information,
-                schema=self.enhanced_schema,
+                schema=schema,
             )
             json_data = self.llm.generate(prompt)
             logger.info(f"Converted JSON:\n{json.dumps(json_data, indent=2)}")
@@ -184,9 +208,11 @@ class Graph:
             logger.error(f"Failed to convert information to annotation JSON: {e}")
             raise
 
-    def _validate_and_update(self, initial_json):
+    def _validate_and_update(self, initial_json, neo4j=None, schema_handler=None):
         try:
             logger.info("Validating and updating the JSON structure.")
+            _neo4j = neo4j if neo4j is not None else self.neo4j
+            _schema_handler = schema_handler if schema_handler is not None else self.schema_handler
             node_types = {}
             validation_report = {
                 "property_changes": [],
@@ -232,7 +258,7 @@ class Graph:
             # Run one batch Neo4j query per (node_type, property_key)
             similarity_cache = {}  # (node_type, property_key, value) -> [(similar_value, score), ...]
             for (node_type, property_key), values in lookup_needed.items():
-                batch = self.neo4j.get_similar_property_values_batch(node_type, property_key, list(values))
+                batch = _neo4j.get_similar_property_values_batch(node_type, property_key, list(values))
                 for value, matches in batch.items():
                     similarity_cache[(node_type, property_key, value)] = matches
 
@@ -428,11 +454,11 @@ class Graph:
                 rel = edge["type"]
                 conn = f"{s}-{rel}-{t}"
 
-                if conn in self.schema_handler.processed_schema:
+                if conn in _schema_handler.processed_schema:
                     valid_predicates.append(edge)
                 else:
                     rev = f"{t}-{rel}-{s}"
-                    if rev in self.schema_handler.processed_schema:
+                    if rev in _schema_handler.processed_schema:
                         # Swap direction and keep
                         validation_report["direction_changes"].append(
                             {"relation_type": rel, "original": f"{s} → {t}", "corrected": f"{t} → {s}"}
@@ -553,6 +579,7 @@ class Graph:
         pending_json = entry["json"]
         candidates  = entry.get("candidates", {})
         unconfirmed = entry.get("unconfirmed", [])
+        pending_organism = entry.get("organism", "human")
 
         verdict = self._classify_confirmation(query)
 
@@ -562,6 +589,7 @@ class Graph:
             return {
                 "text": "Got it! I've built the annotation structure using the confirmed match. The structured data is ready.",
                 "json_format": resolved,
+                "organism": pending_organism,
                 "agents_completed": ["annotation_agent"],
             }
 
@@ -571,6 +599,7 @@ class Graph:
             return {
                 "text": "Understood! I've built the annotation structure without the unidentified node. The structured data is ready.",
                 "json_format": resolved,
+                "organism": pending_organism,
                 "agents_completed": ["annotation_agent"],
             }
 
@@ -1036,13 +1065,27 @@ class Graph:
 
     def _handle_biological_query(self, query, user_id):
         try:
+            # Detect organism and select the right schema + Neo4j resources
+            organism = self._detect_organism(query)
+            if organism == "fly" and self.fly_schema_handler and self.fly_neo4j:
+                active_schema = self.fly_enhanced_schema
+                active_schema_handler = self.fly_schema_handler
+                active_neo4j = self.fly_neo4j
+                logger.info("Organism detected: fly — using fly schema and Neo4j")
+            else:
+                organism = "human"
+                active_schema = self.enhanced_schema
+                active_schema_handler = self.schema_handler
+                active_neo4j = self.neo4j
+                logger.info("Organism detected: human — using human schema and Neo4j")
+
             # Extract and validate JSON query
             emit_to_user(
                 user=user_id,
                 message="Extracting relevant information from your query...",
             )
             try:
-                relevant_information = self._extract_relevant_information(query)
+                relevant_information = self._extract_relevant_information(query, enhanced_schema=active_schema)
                 logger.info("Relevant information extraction successful")
 
                 # Convert to initial JSON
@@ -1050,12 +1093,12 @@ class Graph:
                     user=user_id, message="Validating Constructed Json Format..."
                 )
                 initial_json = self._convert_to_annotation_json(
-                    relevant_information, query
+                    relevant_information, query, enhanced_schema=active_schema
                 )
                 logger.info("Initial JSON conversion successful")
 
                 # Validate and update
-                validation = self._validate_and_update(initial_json)
+                validation = self._validate_and_update(initial_json, neo4j=active_neo4j, schema_handler=active_schema_handler)
                 logger.info("JSON validation successful")
 
                 # Collect nodes that need user confirmation before the JSON can be finalised
@@ -1077,6 +1120,7 @@ class Graph:
                         "json": validation["updated_json"],
                         "candidates": validation.get("candidates", {}),
                         "unconfirmed": unconfirmed_nodes,
+                        "organism": organism,
                     }
                     return {
                         "success": True,
@@ -1090,10 +1134,12 @@ class Graph:
 
                 summary = self._describe_annotation_result(query, validation["updated_json"])
 
+                updated_json = validation["updated_json"]
                 json_query = {
                     "success": True,
                     "summary": summary,
-                    "json_format": validation["updated_json"],
+                    "json_format": updated_json,
+                    "organism": organism,
                     "validation_report": validation["validation_report"],
                     "resource": {"id": None, "type": "annotation"},
                 }

@@ -41,21 +41,8 @@ logger = logging.getLogger(__name__)
 
 
 def load_config():
-    """Loads the application configuration from a YAML file."""
-    logger.info("Loading environment variables from .env file")
-    load_dotenv()  # Load environment variables from .env
-
-    config_path = "./config/config.yaml"
-    logger.info(f"Reading configuration from {config_path}")
-
-    try:
-        with open(config_path, "r") as config_file:
-            config = yaml.safe_load(config_file)
-            logger.info("Configuration loaded successfully")
-            return config
-    except Exception as e:
-        logger.error(f"Error loading config file: {e}")
-        raise
+    load_dotenv()
+    return {}
 
 
 def initialize_database():
@@ -89,13 +76,21 @@ def create_app():
     )
     logger.info("FlaskLimiter initialized")
 
-    # Initialize SchemaHandler
+    # Initialize SchemaHandler (human)
     schema_handler = SchemaHandler(
-        schema_config_path="./config/schema_config.yaml",
-        biocypher_config_path="./config/biocypher_config.yaml",
-        enhanced_schema_path="./config/enhanced_schema.txt",
+        schema_config_path="./app/annotation_graph/schema/human/schema_config.yaml",
+        biocypher_config_path="./app/annotation_graph/schema/human/biocypher_config.yaml",
+        enhanced_schema_path="./app/annotation_graph/schema/human/enhanced_schema.txt",
     )
-    logger.info("SchemaHandler initialized")
+    logger.info("SchemaHandler (human) initialized")
+
+    # Initialize SchemaHandler (fly)
+    fly_schema_handler = SchemaHandler(
+        schema_config_path="./app/annotation_graph/schema/fly/dmel_full_schema_config.yaml",
+        biocypher_config_path="./app/annotation_graph/schema/fly/fly_biocypher_config.yaml",
+        enhanced_schema_path="./app/annotation_graph/schema/fly/fly_enhanced_schema.txt",
+    )
+    logger.info("SchemaHandler (fly) initialized")
 
     # Initialize Basic LLM model
     basic_llm_provider = os.getenv("BASIC_LLM_PROVIDER")
@@ -210,6 +205,7 @@ def create_app():
         advanced_llm,
         basic_llm,
         schema_handler,
+        fly_schema_handler=fly_schema_handler,
         embedding_model=embedding_model,
         qdrant_client=qdrant_client,
         mongo_db_manager=mongo_db_manager,
@@ -220,6 +216,7 @@ def create_app():
     app.config["basic_llm"] = basic_llm
     app.config["advanced_llm"] = advanced_llm
     app.config["schema_handler"] = schema_handler
+    app.config["fly_schema_handler"] = fly_schema_handler
     app.config["ai_assistant"] = ai_assistant
     logger.info("App config populated with models and assistants")
 
