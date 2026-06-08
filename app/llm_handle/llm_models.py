@@ -114,9 +114,9 @@ def get_llm_model(model_provider, model_version=None):
             gemini_api_key, model_provider, model_version or "gemini-pro"
         )
 
-    elif model_provider in ("ollama"):
-        return OllamaModel(
-            model_name=model_version or os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+    elif model_provider == "local_model":
+        return LocalModel(
+            model_name=model_version or os.getenv("LOCAL_MODEL", "gemma4")
         )
 
     else:
@@ -128,16 +128,17 @@ class LLMInterface:
         raise NotImplementedError("Subclasses must implement the generate method")
 
 
-class OllamaModel(LLMInterface):
+class LocalModel(LLMInterface):
     def __init__(self, model_name: str = None):
-        self.model_name = model_name or os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
-        self.model_provider = "ollama"
-        host = os.getenv("OLLAMA_HOST")
+        self.model_name = model_name or os.getenv("LOCAL_MODEL", "gemma4")
+        self.model_provider = "local_model"
+        host = os.getenv("LOCAL_MODEL_HOST")
+        api_key = os.getenv("LOCAL_MODEL_API_KEY", "")
         self.client = openai.OpenAI(
             base_url=f"{host}/v1",
-            api_key="ollama"
+            api_key=api_key
         )
-        logger.info(f"OllamaModel initialized: {self.model_name} at {host}")
+        logger.info(f"LocalModel initialized: {self.model_name} at {host}")
 
     def generate(self, prompt: str, system_prompt=None, **kwargs) -> Dict[str, Any]:
         messages = []
