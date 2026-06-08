@@ -21,6 +21,7 @@ Query: {query}
 Respond with ONLY one word: "human" or "fly". No explanation.
 """
 
+
 EXTRACT_RELEVANT_INFORMATION_PROMPT = """
 ## TASK:
 Let's think step by step to extract the relevant information needed to build the query based on the schema.
