@@ -19,6 +19,9 @@ from app.storage.redis import redis_manager
 from .json_to_cypher import JsonToCypherConverter
 
 
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -95,6 +98,8 @@ class Graph:
                 headers={"Authorization": f"Bearer {token}"},
             )
             response.raise_for_status()
+            json_response = response.json()
+            # logger.info(f"Successfully queried the knowledge graph. 'nodes count': {len(json_response.get('nodes'))} 'edges count': {len(json_response.get('edges', []))}")
             return response.json()
         except requests.RequestException as e:
             logger.error(f"Error querying knowledge graph: {e}")
@@ -125,7 +130,13 @@ class Graph:
                 "resource": {"id": None, "type": "annotation"},
             }
 
+        # Use the updated JSON for subsequent steps
         validated_json = validation["updated_json"]
+        # validated_json["question"] = query
+        """
+            TODO
+            add query along with job id to specifiy to what query is the json requested is related to.
+            """
         return {
             "text": None,
             "json_format": validated_json,
@@ -133,7 +144,7 @@ class Graph:
             "resource": {"id": None, "type": "annotation"},
         }
 
-    def generate_graph(self, validated_json, token):
+    def generate_graph(self, query, validated_json, token):
         try:
             graph = self.query_knowledge_graph(validated_json, token)
 
@@ -155,28 +166,26 @@ class Graph:
                 "text": f"I apologize, but I wasn't able to generate the graph you requested. Could you please rephrase your question or provide additional details so I can better understand what you're looking for?"
             }
 
-    # Keyword signals that unambiguously indicate Drosophila — checked before LLM call.
-    # Two-pronged fly detection:
-    # 1. Explicit schema request ("fly schema", "using fly", "drosophila schema")
-    # 2. Unambiguous fly-specific biology (anatomy, identifiers, species names)
-    # Ambiguous gene names (brca2, p53) are NOT signals — users will say "fly schema" explicitly.
-    _FLY_KEYWORDS = {
-        # Explicit schema/organism requests
-        "fly schema", "drosophila schema", "using fly", "use fly",
-        "fly gene", "fly organism", "fly specific",
-        # Species names
-        "drosophila", "dmel", "melanogaster", "d. melanogaster", "fruit fly",
-        # FlyBase identifiers
-        "fbgn", "fbal", "fbtr", "fbbt", "fbdv", "fbrf",
-        # Fly-exclusive anatomy (absent in human schemas)
-        "wing disc", "eye disc", "leg disc", "imaginal disc",
-        "fat body", "malpighian tubule", "polytene", "salivary gland polytene",
-        "hemocyte", "ommatidia", "ommatidium",
-    }
-
     def _detect_organism(self, query) -> str:
-        query_lower = query.lower()
-        if any(kw in query_lower for kw in self._FLY_KEYWORDS):
+        q_lower = query.lower()
+        fly_keywords = [
+            # organism names
+            "drosophila", "melanogaster", "dmel", "fruit fly", "fly schema",
+            # flybase id prefixes
+            "fbgn", "fbal", "fbtr", "fbbt", "fbdv", "fbrf",
+            # fly-exclusive gene names (absent in human)
+            " wg ", " hh ", " dpp ", " arm ", " ci ", " nkd ", " ptc ", " smo ",
+            " bsk ", " hep ", " yki ", " sd ", " eve ", " ftz ", " vg ",
+            " en ", " sev ", " boss ", " cos2 ", " puc ", " lats ", " wts ",
+            # fly anatomy / tissue / cell terms
+            "wing disc", "eye disc", "leg disc", "imaginal disc",
+            "fat body", "hemocyte", "plasmatocyte", "crystal cell",
+            "oenocyte", "malpighian", "salivary gland polytene",
+            "dorsal vessel", "ring gland", "follicle cell", "nurse cell",
+            # fly cell lines
+            "s2 cell",
+        ]
+        if any(kw in q_lower for kw in fly_keywords):
             return "fly"
         try:
             prompt = ORGANISM_DETECTION_PROMPT.format(query=query)
@@ -219,252 +228,289 @@ class Graph:
             logger.error(f"Failed to convert information to annotation JSON: {e}")
             raise
 
-    def _build_lookup_needed(self, updated_json):
-        lookup_needed = {}
-        for node in updated_json.get("nodes", []):
-            node_type = node.get("type")
-            node_db_id = node.get("id", "")
-            if node_db_id:
-                id_prop = self._node_id_property.get(node_type.lower())
-                if id_prop:
-                    lookup_needed.setdefault((node_type, id_prop), set()).add(node_db_id)
-            for property_key, property_value in node.get("properties", {}).items():
-                if not property_value and property_value != 0:
-                    continue
-                if node.get("is_list") and isinstance(property_value, (str, list)):
-                    items = (
-                        [i.strip() for i in property_value.split(",") if i.strip()]
-                        if isinstance(property_value, str) else property_value
-                    )
-                    lookup_needed.setdefault((node_type, property_key), set()).update(items)
-                elif isinstance(property_value, str):
-                    lookup_needed.setdefault((node_type, property_key), set()).add(property_value)
-        return lookup_needed
-
-    def _build_similarity_cache(self, neo4j, lookup_needed):
-        similarity_cache = {}
-        for (node_type, property_key), values in lookup_needed.items():
-            batch = neo4j.get_similar_property_values_batch(node_type, property_key, list(values))
-            for value, matches in batch.items():
-                similarity_cache[(node_type, property_key, value)] = matches
-        return similarity_cache
-
-    def _build_batch_for_llm(self, updated_json, similarity_cache):
-        batch_for_llm = {}
-        for node in updated_json.get("nodes", []):
-            node_type = node.get("type")
-            node_db_id = node.get("id", "")
-            if node_db_id:
-                id_prop = self._node_id_property.get(node_type.lower())
-                if id_prop:
-                    similar = similarity_cache.get((node_type, id_prop, node_db_id), [])
-                    if similar and similar[0][0].lower() != node_db_id.lower():
-                        batch_for_llm[node_db_id] = similar
-                    elif not similar:
-                        batch_for_llm[node_db_id] = []
-            for property_key, property_value in node.get("properties", {}).items():
-                if not property_value and property_value != 0:
-                    continue
-                if node.get("is_list") and isinstance(property_value, (str, list)):
-                    items = (
-                        [i.strip() for i in property_value.split(",") if i.strip()]
-                        if isinstance(property_value, str) else property_value
-                    )
-                    for item in items:
-                        similar = similarity_cache.get((node_type, property_key, item), [])
-                        if similar and similar[0][0].lower() != item.lower():
-                            batch_for_llm[item] = similar
-                        elif not similar:
-                            batch_for_llm[item] = []
-                elif isinstance(property_value, str):
-                    similar = similarity_cache.get((node_type, property_key, property_value), [])
-                    if similar and similar[0][0].lower() != property_value.lower():
-                        batch_for_llm[property_value] = similar
-                    elif not similar:
-                        batch_for_llm[property_value] = []
-        return batch_for_llm
-
-    def _validate_node_id_field(self, node, node_type, similarity_cache, llm_picks, validation_report):
-        node_db_id = node.get("id", "")
-        if not node_db_id:
-            return
-        id_prop = self._node_id_property.get(node_type.lower())
-        if not id_prop:
-            return
-        node_id = node.get("node_id")
-        similar_values = similarity_cache.get((node_type, id_prop, node_db_id), [])
-        if similar_values and similar_values[0][0].lower() == node_db_id.lower():
-            return
-        pick = llm_picks.get(node_db_id)
-        top = similar_values[0][0] if similar_values else None
-        suggestion = pick["value"] if pick else top
-        if pick and pick.get("auto_accept"):
-            node["id"] = pick["value"]
-        else:
-            node["status"] = False
-            node["needs_confirmation"] = True
-            node["pending_substitutions"] = {node_db_id: suggestion or node_db_id}
-            validation_report["failed_nodes"].append(
-                {"node_id": node_id, "reason": f"'{node_db_id}' not found in database"}
-            )
-
-    def _validate_list_property(self, node, node_id, node_type, property_key, property_value,
-                                 similarity_cache, llm_picks, validation_report, properties):
-        items = (
-            [i.strip() for i in property_value.split(",") if i.strip()]
-            if isinstance(property_value, str) else property_value
-        )
-        validated_items, failed_items, item_suggestions = [], [], {}
-        for item in items:
-            similar_values = similarity_cache.get((node_type, property_key, item), [])
-            if not similar_values:
-                failed_items.append(item)
-                continue
-            top = similar_values[0][0]
-            if top.lower() == item.lower():
-                validated_items.append(top)
-                continue
-            pick = llm_picks.get(item)
-            if pick is None:
-                failed_items.append(item)
-                item_suggestions[item] = similar_values[0][0]
-            elif pick.get("auto_accept"):
-                validated_items.append(pick["value"])
-            else:
-                failed_items.append(item)
-                item_suggestions[item] = pick["value"]
-        confirmable = {item: item_suggestions[item] for item in failed_items if item in item_suggestions}
-        truly_missing = [item for item in failed_items if item not in item_suggestions]
-        properties[property_key] = ", ".join(validated_items + truly_missing)
-        if failed_items:
-            node["status"] = False
-            if confirmable:
-                node["needs_confirmation"] = True
-                node["pending_substitutions"] = confirmable
-                node["all_list_values"] = list(items)
-            if truly_missing:
-                node["not_validated"] = truly_missing
-            validation_report["failed_nodes"].append(
-                {"node_id": node_id, "reason": f"Could not find in database: {failed_items}"}
-            )
-        else:
-            node["status"] = True
-
-    def _validate_string_property(self, node, node_id, node_type, property_key, property_value,
-                                   similarity_cache, llm_picks, validation_report, properties):
-        similar_values = similarity_cache.get((node_type, property_key, property_value), [])
-        if not similar_values:
-            node["status"] = False
-            node["validation_error"] = f"'{property_value}' not found in the database."
-            validation_report["failed_nodes"].append(
-                {"node_id": node_id, "reason": node["validation_error"]}
-            )
-            return
-        top = similar_values[0][0]
-        if top.lower() == property_value.lower():
-            properties[property_key] = top
-            return
-        pick = llm_picks.get(property_value)
-        if pick is None:
-            node["status"] = False
-            node["needs_confirmation"] = True
-            node["pending_substitutions"] = {property_value: top}
-            validation_report["failed_nodes"].append(
-                {"node_id": node_id, "reason": f"'{property_value}' not found; nearest is '{top}'"}
-            )
-        elif pick.get("auto_accept"):
-            properties[property_key] = pick["value"]
-        else:
-            node["status"] = False
-            node["needs_confirmation"] = True
-            node["pending_substitutions"] = {property_value: pick["value"]}
-            validation_report["failed_nodes"].append(
-                {"node_id": node_id, "reason": f"'{property_value}' not found; nearest match is '{pick['value']}'"}
-            )
-
-    def _validate_node_properties(self, node, node_id, node_type, similarity_cache, llm_picks, validation_report):
-        properties = node.get("properties", {})
-        for property_key in list(properties.keys()):
-            property_value = properties[property_key]
-            if not property_value and property_value != 0:
-                del properties[property_key]
-                validation_report["removed_properties"].append(
-                    {"node_type": node_type, "node_id": node_id,
-                     "property": property_key, "original_value": property_value}
-                )
-            elif node.get("is_list") and isinstance(property_value, (str, list)):
-                self._validate_list_property(node, node_id, node_type, property_key, property_value,
-                                             similarity_cache, llm_picks, validation_report, properties)
-            elif isinstance(property_value, str):
-                self._validate_string_property(node, node_id, node_type, property_key, property_value,
-                                               similarity_cache, llm_picks, validation_report, properties)
-
-    def _validate_edges(self, updated_json, node_types, schema_handler, validation_report):
-        valid_predicates = []
-        for edge in updated_json.get("predicates", []):
-            s = node_types.get(edge["source"])
-            t = node_types.get(edge["target"])
-            rel = edge["type"]
-            conn = f"{s}-{rel}-{t}"
-            if conn in schema_handler.processed_schema:
-                valid_predicates.append(edge)
-            elif f"{t}-{rel}-{s}" in schema_handler.processed_schema:
-                validation_report["direction_changes"].append(
-                    {"relation_type": rel, "original": f"{s} → {t}", "corrected": f"{t} → {s}"}
-                )
-                edge["source"], edge["target"] = edge["target"], edge["source"]
-                valid_predicates.append(edge)
-            else:
-                logger.warning(f"Dropping invalid predicate: {conn}")
-                validation_report.setdefault("removed_predicates", []).append(
-                    {"type": rel, "source": s, "target": t}
-                )
-        updated_json["predicates"] = valid_predicates
-
     def _validate_and_update(self, initial_json, neo4j=None, schema_handler=None):
-        validation_report = {
-            "property_changes": [],
-            "direction_changes": [],
-            "removed_properties": [],
-            "failed_nodes": [],
-            "validation_status": "success",
-        }
         try:
             logger.info("Validating and updating the JSON structure.")
             _neo4j = neo4j if neo4j is not None else self.neo4j
             _schema_handler = schema_handler if schema_handler is not None else self.schema_handler
+            node_types = {}
+            validation_report = {
+                "property_changes": [],
+                "direction_changes": [],
+                "removed_properties": [],
+                "failed_nodes": [],
+                "validation_status": "success",
+            }
+
+            # Create a deep copy to track changes
             updated_json = copy.deepcopy(initial_json)
+
+            # Validate node properties
             if "nodes" not in updated_json:
                 raise ValueError("The input JSON must contain a 'nodes' key.")
 
-            lookup_needed = self._build_lookup_needed(updated_json)
-            similarity_cache = self._build_similarity_cache(_neo4j, lookup_needed)
-            batch_for_llm = self._build_batch_for_llm(updated_json, similarity_cache)
+            # Pre-pass: collect all values that need Neo4j lookup grouped by (node_type, property_key)
+            lookup_needed = {}  # (node_type, property_key) -> set of string values
+            for node in updated_json.get("nodes"):
+                node_type = node.get("type")
+                properties = node.get("properties", {})
+
+                # Also validate the `id` field using the node type's primary property
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        lookup_needed.setdefault((node_type, id_prop), set()).add(node_db_id)
+
+                for property_key, property_value in properties.items():
+                    if not property_value and property_value != 0:
+                        continue
+                    if node.get("is_list") and isinstance(property_value, (str, list)):
+                        items = (
+                            [i.strip() for i in property_value.split(",") if i.strip()]
+                            if isinstance(property_value, str)
+                            else property_value
+                        )
+                        lookup_needed.setdefault((node_type, property_key), set()).update(items)
+                    elif isinstance(property_value, str):
+                        lookup_needed.setdefault((node_type, property_key), set()).add(property_value)
+
+            # Run one batch Neo4j query per (node_type, property_key)
+            similarity_cache = {}  # (node_type, property_key, value) -> [(similar_value, score), ...]
+            for (node_type, property_key), values in lookup_needed.items():
+                batch = _neo4j.get_similar_property_values_batch(node_type, property_key, list(values))
+                for value, matches in batch.items():
+                    similarity_cache[(node_type, property_key, value)] = matches
+
+            # Pre-pass: collect non-exact items for a single batched LLM call
+            batch_for_llm = {}  # item -> [(candidate, score), ...]
+            for node in updated_json.get("nodes"):
+                node_type = node.get("type")
+                properties = node.get("properties", {})
+
+                # Check id field
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        similar = similarity_cache.get((node_type, id_prop, node_db_id), [])
+                        if similar:
+                            if similar[0][0].lower() != node_db_id.lower():
+                                batch_for_llm[node_db_id] = similar
+                        else:
+                            # No Neo4j candidates at all — still needs confirmation with empty list
+                            batch_for_llm[node_db_id] = []
+
+                for property_key, property_value in properties.items():
+                    if not property_value and property_value != 0:
+                        continue
+                    if node.get("is_list") and isinstance(property_value, (str, list)):
+                        items = (
+                            [i.strip() for i in property_value.split(",") if i.strip()]
+                            if isinstance(property_value, str) else property_value
+                        )
+                        for item in items:
+                            similar = similarity_cache.get((node_type, property_key, item), [])
+                            if similar:
+                                if similar[0][0].lower() != item.lower():
+                                    batch_for_llm[item] = similar
+                            else:
+                                batch_for_llm[item] = []
+                    elif isinstance(property_value, str):
+                        similar = similarity_cache.get((node_type, property_key, property_value), [])
+                        if similar:
+                            if similar[0][0].lower() != property_value.lower():
+                                batch_for_llm[property_value] = similar
+                        else:
+                            batch_for_llm[property_value] = []
+
+            # One LLM call for all ambiguous items → {item: {"value": ..., "auto_accept": bool} | None}
             llm_picks = self._select_best_matching_values_batch(batch_for_llm)
 
-            node_types = {}
-            for node in updated_json.get("nodes", []):
+            for node in updated_json.get("nodes"):
                 node_type = node.get("type")
+                properties = node.get("properties", {})
                 node_id = node.get("node_id")
                 node_types[node_id] = node_type
                 if not node.get("is_list"):
                     node["status"] = True
-                self._validate_node_id_field(node, node_type, similarity_cache, llm_picks, validation_report)
-                self._validate_node_properties(node, node_id, node_type, similarity_cache, llm_picks, validation_report)
 
-            self._validate_edges(updated_json, node_types, _schema_handler, validation_report)
+                # Validate `id` field if set
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        similar_values = similarity_cache.get((node_type, id_prop, node_db_id), [])
+                        if similar_values and similar_values[0][0].lower() == node_db_id.lower():
+                            pass  # exact match — fine
+                        else:
+                            pick = llm_picks.get(node_db_id)
+                            top = similar_values[0][0] if similar_values else None
+                            suggestion = (pick["value"] if pick and not pick.get("auto_accept") else
+                                          (pick["value"] if pick and pick.get("auto_accept") else top))
+                            if pick and pick.get("auto_accept"):
+                                # Trivial difference — silently fix the id
+                                node["id"] = pick["value"]
+                            else:
+                                # Genuinely different or no LLM pick — ask user
+                                node["status"] = False
+                                node["needs_confirmation"] = True
+                                node["pending_substitutions"] = {node_db_id: suggestion or node_db_id}
+                                validation_report["failed_nodes"].append(
+                                    {"node_id": node_id, "reason": f"'{node_db_id}' not found in database"}
+                                )
+
+                # Track removed properties
+                for property_key in list(properties.keys()):
+                    property_value = properties[property_key]
+
+                    if not property_value and property_value != 0:
+                        del properties[property_key]
+                        validation_report["removed_properties"].append(
+                            {
+                                "node_type": node_type,
+                                "node_id": node_id,
+                                "property": property_key,
+                                "original_value": property_value,
+                            }
+                        )
+                    elif node.get("is_list") and isinstance(property_value, (str, list)):
+                        items = (
+                            [i.strip() for i in property_value.split(",") if i.strip()]
+                            if isinstance(property_value, str)
+                            else property_value
+                        )
+                        validated_items = []
+                        failed_items = []
+                        item_suggestions = {}
+                        for item in items:
+                            similar_values = similarity_cache.get((node_type, property_key, item), [])
+                            if similar_values:
+                                top = similar_values[0][0]
+                                if top.lower() == item.lower():
+                                    # Exact case match — auto-accept
+                                    validated_items.append(top)
+                                else:
+                                    pick = llm_picks.get(item)
+                                    if pick is None:
+                                        # LLM says no clear match — still ask with the top Neo4j result
+                                        failed_items.append(item)
+                                        if similar_values:
+                                            item_suggestions[item] = similar_values[0][0]
+                                    elif pick.get("auto_accept"):
+                                        # Trivial typo/case/punctuation — silently fix
+                                        validated_items.append(pick["value"])
+                                    else:
+                                        # Genuinely different entity — ask user
+                                        failed_items.append(item)
+                                        item_suggestions[item] = pick["value"]
+                            else:
+                                failed_items.append(item)
+
+                        confirmable = {
+                            item: item_suggestions[item]
+                            for item in failed_items if item in item_suggestions
+                        }
+                        truly_missing = [item for item in failed_items if item not in item_suggestions]
+
+                        properties[property_key] = ", ".join(validated_items + truly_missing)
+                        if failed_items:
+                            node["status"] = False
+                            if confirmable:
+                                node["needs_confirmation"] = True
+                                node["pending_substitutions"] = confirmable
+                                node["all_list_values"] = list(items)
+                            if truly_missing:
+                                node["not_validated"] = truly_missing
+                            validation_report["failed_nodes"].append(
+                                {"node_id": node_id, "reason": f"Could not find in database: {failed_items}"}
+                            )
+                        else:
+                            node["status"] = True
+
+                    elif isinstance(property_value, str):
+                        similar_values = similarity_cache.get((node_type, property_key, property_value), [])
+                        if similar_values:
+                            top = similar_values[0][0]
+                            if top.lower() == property_value.lower():
+                                # Exact case match — auto-accept
+                                properties[property_key] = top
+                            else:
+                                pick = llm_picks.get(property_value)
+                                if pick is None:
+                                    # LLM unsure — still ask with the top Neo4j result
+                                    node["status"] = False
+                                    node["needs_confirmation"] = True
+                                    node["pending_substitutions"] = {property_value: top}
+                                    validation_report["failed_nodes"].append(
+                                        {"node_id": node_id, "reason": f"'{property_value}' not found; nearest is '{top}'"}
+                                    )
+                                elif pick.get("auto_accept"):
+                                    # Trivial difference — silently fix
+                                    properties[property_key] = pick["value"]
+                                else:
+                                    # Genuinely different — ask user
+                                    node["status"] = False
+                                    node["needs_confirmation"] = True
+                                    node["pending_substitutions"] = {property_value: pick["value"]}
+                                    validation_report["failed_nodes"].append(
+                                        {
+                                            "node_id": node_id,
+                                            "reason": f"'{property_value}' not found; nearest match is '{pick['value']}'",
+                                        }
+                                    )
+                        else:
+                            node["status"] = False
+                            node["validation_error"] = f"'{property_value}' not found in the database."
+                            validation_report["failed_nodes"].append(
+                                {"node_id": node_id, "reason": node["validation_error"]}
+                            )
+
+            # Validate edge direction — remove edges that don't exist in the schema
+            valid_predicates = []
+            for edge in updated_json.get("predicates", []):
+                s = node_types.get(edge["source"])
+                t = node_types.get(edge["target"])
+                rel = edge["type"]
+                conn = f"{s}-{rel}-{t}"
+
+                if conn in _schema_handler.processed_schema:
+                    valid_predicates.append(edge)
+                else:
+                    rev = f"{t}-{rel}-{s}"
+                    if rev in _schema_handler.processed_schema:
+                        # Swap direction and keep
+                        validation_report["direction_changes"].append(
+                            {"relation_type": rel, "original": f"{s} → {t}", "corrected": f"{t} → {s}"}
+                        )
+                        edge["source"], edge["target"] = edge["target"], edge["source"]
+                        valid_predicates.append(edge)
+                    else:
+                        # Not in schema at all — drop it silently
+                        logger.warning(f"Dropping invalid predicate: {conn}")
+                        validation_report.setdefault("removed_predicates", []).append(
+                            {"type": rel, "source": s, "target": t}
+                        )
+            updated_json["predicates"] = valid_predicates
 
             for node in updated_json.get("nodes", []):
                 node.pop("is_list", None)
+
+            # Remove duplicate nodes (same type + properties) the LLM may have hallucinated
             updated_json["nodes"] = self._deduplicate_nodes(
                 updated_json.get("nodes", []), updated_json.get("predicates", [])
             )
-            logger.info(f"Validated and updated JSON: \n{json.dumps(updated_json, indent=2)}")
+
+            logger.info(
+                f"Validated and updated JSON: \n{json.dumps(updated_json, indent=2)}"
+            )
+
             return {
                 "updated_json": updated_json,
                 "validation_report": validation_report,
-                "candidates": batch_for_llm,
+                "candidates": batch_for_llm,  # {item: [(candidate, score), ...]}
             }
+
         except Exception as e:
             logger.error(f"Validation and update of JSON failed: {e}")
             validation_report["validation_status"] = "failed"
@@ -633,40 +679,6 @@ class Graph:
         except Exception:
             return "new_query"
 
-    def _apply_id_substitution(self, node, subs):
-        node_id_val = node.get("id", "")
-        if not node_id_val or node_id_val not in subs:
-            return
-        suggested = subs[node_id_val]
-        id_prop = self._node_id_property.get(node.get("type", "").lower())
-        if id_prop:
-            node.setdefault("properties", {})[id_prop] = suggested
-        node["id"] = ""
-
-    def _apply_property_substitutions_to_node(self, node, subs):
-        for prop_key, prop_val in node.get("properties", {}).items():
-            if not isinstance(prop_val, str):
-                continue
-            parts = [p.strip() for p in prop_val.split(",") if p.strip()]
-            replaced = set()
-            new_parts = []
-            for part in parts:
-                replacement = next(
-                    (sugg for orig, sugg in subs.items() if part.lower() == orig.lower()),
-                    None,
-                )
-                if replacement:
-                    new_parts.append(replacement)
-                    replaced.add(part.lower())
-                else:
-                    new_parts.append(part)
-            existing_lower = {p.lower() for p in new_parts}
-            for orig, sugg in subs.items():
-                if orig.lower() not in replaced and sugg.lower() not in existing_lower:
-                    new_parts.append(sugg)
-                    existing_lower.add(sugg.lower())
-            node["properties"][prop_key] = ", ".join(new_parts)
-
     def _apply_pending_substitutions(self, pending_json: dict, apply: bool = True) -> dict:
         result = copy.deepcopy(pending_json)
         for node in result.get("nodes", []):
@@ -674,12 +686,45 @@ class Graph:
                 continue
             if apply:
                 subs = node["pending_substitutions"]
-                self._apply_id_substitution(node, subs)
-                self._apply_property_substitutions_to_node(node, subs)
+
+                # Handle id-field substitution: move result to the correct property
+                node_id_val = node.get("id", "")
+                if node_id_val and node_id_val in subs:
+                    suggested = subs[node_id_val]
+                    id_prop = self._node_id_property.get(node.get("type", "").lower())
+                    if id_prop:
+                        node.setdefault("properties", {})[id_prop] = suggested
+                    node["id"] = ""
+
+                # Handle property-value substitutions
+                for prop_key, prop_val in node.get("properties", {}).items():
+                    if not isinstance(prop_val, str):
+                        continue
+                    parts = [p.strip() for p in prop_val.split(",") if p.strip()]
+                    replaced = set()
+                    new_parts = []
+                    for part in parts:
+                        replacement = next(
+                            (sugg for orig, sugg in subs.items() if part.lower() == orig.lower()),
+                            None,
+                        )
+                        if replacement:
+                            new_parts.append(replacement)
+                            replaced.add(part.lower())
+                        else:
+                            new_parts.append(part)
+                    existing_lower = {p.lower() for p in new_parts}
+                    for orig, sugg in subs.items():
+                        if orig.lower() not in replaced and sugg.lower() not in existing_lower:
+                            new_parts.append(sugg)
+                            existing_lower.add(sugg.lower())
+                    node["properties"][prop_key] = ", ".join(new_parts)
             node["status"] = True
             for key in ("needs_confirmation", "pending_substitutions", "all_list_values",
                         "not_validated", "validation_error"):
                 node.pop(key, None)
+
+        # Deduplicate nodes that ended up with identical type + properties after substitution
         result["nodes"] = self._deduplicate_nodes(result.get("nodes", []), result.get("predicates", []))
         return result
 
@@ -782,119 +827,202 @@ class Graph:
         )
         return "\n".join(lines)
 
-    def _process_query_record(self, record, nodes, relationships, node_ids, rel_ids, data, records):
-        record_data = {}
-        for key, value in record.items():
-            if hasattr(value, "labels"):
-                node_data = {"id": str(value.id), "labels": list(value.labels), "properties": dict(value)}
-                if str(value.id) not in node_ids:
-                    nodes.append(node_data)
-                    node_ids.add(str(value.id))
-            elif hasattr(value, "type"):
-                rel_data = {
-                    "id": str(value.id), "type": value.type,
-                    "start_node": str(value.start_node.id), "end_node": str(value.end_node.id),
-                    "properties": dict(value),
-                }
-                if str(value.id) not in rel_ids:
-                    relationships.append(rel_data)
-                    rel_ids.add(str(value.id))
-            else:
-                data[key] = value
-                record_data[key] = value
-        if record_data:
-            records.append(record_data)
-
     def execute_cypher_query(self, cypher_query):
+        # Execute a Cypher query against the Neo4j database and return structured results
         try:
             logger.info(f"Executing Cypher query: {cypher_query}")
+
             driver = self.neo4j.get_driver()
             with driver.session() as session:
+                logger.debug("Executing Neo4j query...")
                 result = session.run(cypher_query)
-                nodes, relationships, records = [], [], []
-                node_ids, rel_ids = set(), set()
-                data = {}
+
+                nodes = []
+                relationships = []
+                node_ids = set()
+                rel_ids = set()
+                data = {}  # Store scalar values for count queries
+
+                # Extract data from the result
+                records = []  # Store all records for multi-record queries
                 for record in result:
-                    self._process_query_record(record, nodes, relationships, node_ids, rel_ids, data, records)
+                    record_data = {}
+                    for key, value in record.items():
+                        if hasattr(value, "labels"):  # This is a node
+                            node_data = {
+                                "id": str(value.id),
+                                "labels": list(value.labels),
+                                "properties": dict(value),
+                            }
+                            if str(value.id) not in node_ids:
+                                nodes.append(node_data)
+                                node_ids.add(str(value.id))
+
+                        elif hasattr(value, "type"):  # This is a relationship
+                            rel_data = {
+                                "id": str(value.id),
+                                "type": value.type,
+                                "start_node": str(value.start_node.id),
+                                "end_node": str(value.end_node.id),
+                                "properties": dict(value),
+                            }
+                            if str(value.id) not in rel_ids:
+                                relationships.append(rel_data)
+                                rel_ids.add(str(value.id))
+
+                        else:  # This is a scalar value (count, property, etc.)
+                            data[key] = value
+                            record_data[key] = value
+
+                    if record_data:
+                        records.append(record_data)
+
+                # Count results
                 counts = {
                     "total_nodes": len(nodes),
                     "total_relationships": len(relationships),
                     "result_records": len(list(result.data())),
                 }
+
+                # Check if this was a path query that should have returned relationships
                 is_path_query = any(
                     rel in cypher_query.lower()
                     for rel in ["transcribes_to", "part_of", "transcribed_from", "translates_to"]
                 )
                 if is_path_query and counts["total_relationships"] == 0:
-                    logger.warning(f"Path query returned no relationships: {cypher_query}")
-                logger.info(f"Query executed successfully. Found {counts['total_nodes']} nodes and {counts['total_relationships']} relationships")
+                    # this indicates an invalid query or missing data
+                    logger.warning(
+                        f"Path query returned no relationships: {cypher_query}"
+                    )
+                logger.info(
+                    f"Query executed successfully. Found {counts['total_nodes']} nodes and {counts['total_relationships']} relationships"
+                )
+
                 return {
                     "success": True,
-                    "data": {"nodes": nodes, "relationships": relationships, "counts": counts, "records": records, **data},
+                    "data": {
+                        "nodes": nodes,
+                        "relationships": relationships,
+                        "counts": counts,
+                        "records": records,
+                        **data,
+                    },
                     "error": None,
                     "cypher_query": cypher_query,
                 }
+
         except Exception as e:
             error_msg = f"Error executing Cypher query: {str(e)}"
             logger.error(error_msg)
+
             return {
                 "success": False,
-                "data": {"nodes": [], "relationships": [], "counts": {"total_nodes": 0, "total_relationships": 0, "result_records": 0}},
+                "data": {
+                    "nodes": [],
+                    "relationships": [],
+                    "counts": {
+                        "total_nodes": 0,
+                        "total_relationships": 0,
+                        "result_records": 0,
+                    },
+                },
                 "error": error_msg,
                 "cypher_query": cypher_query,
             }
 
-    def _build_summary_data(self, query, nodes, relationships):
-        summary_data = {
-            "original_query": query,
-            "nodes_found": len(nodes),
-            "relationships_found": len(relationships),
-            "node_types": {},
-            "key_properties": {},
-            "relationships_info": [],
-        }
-        key_props = {"gene_name", "transcript_id", "exon_id", "gene_type", "chr"}
-        for node in nodes:
-            node_type = node.get("labels", ["unknown"])[0] if node.get("labels") else "unknown"
-            summary_data["node_types"].setdefault(node_type, [])
-            key_info = {p: v for p, v in node.get("properties", {}).items() if p in key_props}
-            if key_info:
-                summary_data["node_types"][node_type].append(key_info)
-        for rel in relationships:
-            summary_data["relationships_info"].append({
-                "type": rel.get("type", "unknown"),
-                "start_node": rel.get("start_node", "unknown"),
-                "end_node": rel.get("end_node", "unknown"),
-            })
-        return summary_data
-
     def summarize_results(self, query, results):
+        # Use LLM to convert database results into user-friendly natural language responses
         try:
             logger.info(f"Starting result summarization for query: '{query}'")
+
+            # Check if results are valid
             if not results.get("success", False):
                 error_msg = results.get("error", "Unknown error occurred")
                 logger.error(f"Cannot summarize failed query results: {error_msg}")
                 return f"I'm sorry, but I encountered an error while searching the database: {error_msg}"
+
+            # Extract data from results
             data = results.get("data", {})
             nodes = data.get("nodes", [])
             relationships = data.get("relationships", [])
             counts = data.get("counts", {})
+
+            # Handle empty results
             if counts.get("total_nodes", 0) == 0:
                 return f"I searched for information about '{query}', but I couldn't find any matching data in the database. Please try rephrasing your question or check if the gene/transcript/exon names are correct."
-            summary_data = self._build_summary_data(query, nodes, relationships)
-            summarization_prompt = self._create_summarization_prompt(query, summary_data)
+
+            # Prepare data for LLM summarization
+            summary_data = {
+                "original_query": query,
+                "nodes_found": len(nodes),
+                "relationships_found": len(relationships),
+                "node_types": {},
+                "key_properties": {},
+                "relationships_info": [],
+            }
+
+            # Analyze nodes by type
+            for node in nodes:
+                node_type = (
+                    node.get("labels", ["unknown"])[0]
+                    if node.get("labels")
+                    else "unknown"
+                )
+                if node_type not in summary_data["node_types"]:
+                    summary_data["node_types"][node_type] = []
+
+                # Extract key properties for summarization
+                properties = node.get("properties", {})
+                key_info = {}
+                for prop, value in properties.items():
+                    if prop in [
+                        "gene_name",
+                        "transcript_id",
+                        "exon_id",
+                        "gene_type",
+                        "chr",
+                    ]:
+                        key_info[prop] = value
+
+                if key_info:
+                    summary_data["node_types"][node_type].append(key_info)
+
+            # Analyze relationships
+            for rel in relationships:
+                rel_info = {
+                    "type": rel.get("type", "unknown"),
+                    "start_node": rel.get("start_node", "unknown"),
+                    "end_node": rel.get("end_node", "unknown"),
+                }
+                summary_data["relationships_info"].append(rel_info)
+
+            # Create LLM prompt for summarization
+            summarization_prompt = self._create_summarization_prompt(
+                query, summary_data
+            )
+
+            # Generate summary using LLM
             logger.info("Generating summary using LLM...")
             summary = self.llm.generate(summarization_prompt)
+
             logger.info(f"Successfully generated summary: {summary[:100]}...")
             return summary
+
         except Exception as e:
-            logger.error(f"Error during result summarization: {str(e)}")
+            error_msg = f"Error during result summarization: {str(e)}"
+            logger.error(error_msg)
+
+            # Fallback to basic summary
             try:
-                counts = results.get("data", {}).get("counts", {})
+                data = results.get("data", {})
+                nodes = data.get("nodes", [])
+                counts = data.get("counts", {})
+
                 if counts.get("total_nodes", 0) > 0:
                     return f"I found {counts['total_nodes']} items related to your query '{query}'. However, I encountered an issue while generating a detailed summary."
-                return f"I couldn't find any information for '{query}' in the database."
-            except Exception:
+                else:
+                    return f"I couldn't find any information for '{query}' in the database."
+            except:
                 return f"I'm sorry, but I encountered an error while processing your query '{query}'."
 
     def _create_summarization_prompt(self, query, summary_data):
@@ -959,10 +1087,10 @@ class Graph:
         try:
             # Detect organism and select the right schema + Neo4j resources
             organism = self._detect_organism(query)
-            if organism == "fly" and self.fly_schema_handler and self.fly_neo4j:
+            if organism == "fly" and self.fly_schema_handler:
                 active_schema = self.fly_enhanced_schema
                 active_schema_handler = self.fly_schema_handler
-                active_neo4j = self.fly_neo4j
+                active_neo4j = self.fly_neo4j if self.fly_neo4j else self.neo4j
                 logger.info("Organism detected: fly — using fly schema and Neo4j")
             else:
                 organism = "human"
@@ -1049,6 +1177,100 @@ class Graph:
                     "pipeline_status": {"json_extraction": "failed"},
                 }
 
+            # logger.info("JSON query extraction successful")
+            # emit_to_user(
+            #     user=user_id, message="Converting query to database language..."
+            # )
+
+            # # # Convert JSON to Cypher
+            # # try:
+            # #     actual_json = json_query.get("json_format", json_query)
+            # #     if not actual_json:
+            # #         raise ValueError("No valid JSON format found in the response")
+
+            # #     logger.info(
+            # #         f"Extracted JSON for Cypher conversion: {json.dumps(actual_json, indent=2)}"
+            # #     )
+
+            # #     converter = JsonToCypherConverter()
+            # #     cypher_query = converter.convert_to_cypher(actual_json)
+            # #     logger.info("Cypher conversion successful")
+            # # except Exception as e:
+            # #     logger.error(f"Failed to convert JSON to Cypher: {str(e)}")
+            # #     return {
+            # #         "success": False,
+            # #         "error": f"Failed to convert query to database language: {str(e)}",
+            # #         "pipeline_status": {
+            # #             "json_extraction": "success",
+            # #             "cypher_conversion": "failed",
+            # #         },
+            # #         "json_query": json_query,
+            # #     }
+
+            # # emit_to_user(user=user_id, message="Searching the database...")
+
+            # # # Execute Cypher query against database
+            # # try:
+            # #     database_results = self.execute_cypher_query(cypher_query)
+            # #     if not database_results.get("success", False):
+            # #         logger.error(
+            # #             f"Database query failed: {database_results.get('error')}"
+            # #         )
+            # #         return {
+            # #             "success": False,
+            # #             "error": f"Database search failed: {database_results.get('error', 'Unknown error')}",
+            # #             "pipeline_status": {
+            # #                 "json_extraction": "success",
+            # #                 "cypher_conversion": "success",
+            # #                 "database_execution": "failed",
+            # #             },
+            # #             "cypher_query": cypher_query,
+            # #             "json_query": json_query,
+            # #         }
+            # #     logger.info("Database query execution successful")
+            # # except Exception as e:
+            # #     logger.error(f"Failed to execute Cypher query: {str(e)}")
+            # #     return {
+            # #         "success": False,
+            # #         "error": f"Database execution error: {str(e)}",
+            # #         "pipeline_status": {
+            # #             "json_extraction": "success",
+            # #             "cypher_conversion": "success",
+            # #             "database_execution": "failed",
+            # #         },
+            # #         "cypher_query": cypher_query,
+            # #         "json_query": json_query,
+            # #     }
+
+            # # emit_to_user(user=user_id, message="Generating your response...")
+
+            # # # Summarize results using LLM
+            # # try:
+            # #     summary = self.summarize_results(query, database_results)
+            # #     logger.info("Result summarization successful")
+            # # except Exception as e:
+            # #     logger.error(f"Failed to summarize results: {str(e)}")
+            # #     summary = f"I found information related to your query '{query}', but encountered an issue generating a detailed summary. Here are the raw results: {database_results.get('data', {}).get('counts', {}).get('total_nodes', 0)} items found."
+            # #     logger.warning(
+            # #         "Using fallback summary due to LLM summarization failure"
+            # #     )
+
+            # # logger.info("Annotation pipeline completed successfully")
+            # # return {
+            # #     "success": True,
+            # #     "summary": summary,
+            # #     "cypher_query": cypher_query,
+            # #     "database_results": database_results,
+            # #     "json_query": json_query,
+            # #     "error": None,
+            # #     "pipeline_status": {
+            # #         "json_extraction": "success",
+            # #         "cypher_conversion": "success",
+            # #         "database_execution": "success",
+            # #         "summarization": "success",
+            # #     },
+            # # }
+
         except Exception as e:
             error_msg = f"Unexpected error in biological query pipeline: {str(e)}"
             logger.error(error_msg)
@@ -1110,20 +1332,6 @@ class Graph:
                 },
             }
 
-    def _format_stats_record(self, key, data, records):
-        value = data.get(key)
-        if value is not None:
-            return f"{key}: {value}"
-        if not records:
-            return f"{key}: No data found"
-        if key == "node_types":
-            parts = [f"{r.get('node_type', 'unknown')} ({r.get('count', 0)})" for r in records]
-            return f"{key}: {', '.join(parts)}"
-        if key == "relationship_types":
-            parts = [f"{r.get('rel_type', 'unknown')} ({r.get('count', 0)})" for r in records]
-            return f"{key}: {', '.join(parts)}"
-        return f"{key}: {records}"
-
     def _generate_database_summary(self):
         try:
             stats_queries = {
@@ -1132,19 +1340,47 @@ class Graph:
                 "node_types": "MATCH (n) RETURN DISTINCT labels(n)[0] as node_type, count(n) as count ORDER BY count DESC",
                 "relationship_types": "MATCH ()-[r]->() RETURN DISTINCT type(r) as rel_type, count(r) as count ORDER BY count DESC",
             }
+
             summary_parts = []
+
             for key, query in stats_queries.items():
                 try:
                     result = self.execute_cypher_query(query)
                     if result.get("success"):
                         data = result.get("data", {})
-                        summary_parts.append(self._format_stats_record(key, data, data.get("records", [])))
+                        value = data.get(key)
+                        records = data.get("records", [])
+
+                        if value is not None:
+                            # Single value (like count queries)
+                            summary_parts.append(f"{key}: {value}")
+                        elif records:
+                            # Multiple records (like node types, relationship types)
+                            if key == "node_types":
+                                node_types = [
+                                    f"{record.get('node_type', 'unknown')} ({record.get('count', 0)})"
+                                    for record in records
+                                ]
+                                summary_parts.append(f"{key}: {', '.join(node_types)}")
+                            elif key == "relationship_types":
+                                rel_types = [
+                                    f"{record.get('rel_type', 'unknown')} ({record.get('count', 0)})"
+                                    for record in records
+                                ]
+                                summary_parts.append(f"{key}: {', '.join(rel_types)}")
+                            else:
+                                summary_parts.append(f"{key}: {records}")
+                        else:
+                            summary_parts.append(f"{key}: No data found")
                     else:
                         summary_parts.append(f"{key}: Unable to retrieve")
+
                 except Exception as e:
                     logger.warning(f"Failed to execute {key} query: {e}")
                     summary_parts.append(f"{key}: Error retrieving")
+
             return "Database Summary:\n" + "\n".join(summary_parts)
+
         except Exception as e:
             logger.error(f"Failed to generate database summary: {e}")
             return "Database Summary:\nUnable to retrieve database information due to an error."
