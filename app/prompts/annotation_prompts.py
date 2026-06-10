@@ -1,20 +1,37 @@
 ORGANISM_DETECTION_PROMPT = """You are a biological query classifier. Determine whether the following query is about human biology or Drosophila melanogaster (fruit fly) biology.
 
-Answer "fly" ONLY when there is a clear, unambiguous signal. Default to "human" whenever you are uncertain.
+## ABSOLUTE OVERRIDES — answer "fly" immediately if ANY of these are present, regardless of other gene names or terms:
 
-Signals that mean FLY (high confidence):
-- Explicit organism words: "Drosophila", "dmel", "fruit fly", "fly", "melanogaster"
-- FlyBase identifiers: FBgn, FBal, FBtr, FBbt, FBdv (e.g. "FBgn0000490")
-- Fly-exclusive gene names that do not exist in human: wg, hh, dpp, en, eve, ftz, vg, arm, sev, boss, Dl, N (Notch fly symbol)
-- Fly anatomy terms: "wing disc", "imaginal disc", "ommatidia", "fat body", "bristle", "salivary gland polytene"
-- Fly allele notation: gene symbols with bracket suffixes like brca2[P1], w[1118], p53[A]
-- Fly developmental stages: "larval stage", "pupal stage", "embryonic stage 5", "wandering larva"
+**Organism words:**
+- "Drosophila", "dmel", "fruit fly", "melanogaster", "D. melanogaster"
 
-Default to "human" when:
-- The organism is not mentioned at all
-- Gene names are ambiguous (e.g. p53, Rb, E2f — exist in both organisms)
-- Only general biology terms are used (pathway, disease, cell type, tissue)
-- Any doubt exists
+**FlyBase identifiers:**
+- Any identifier starting with: FBgn, FBal, FBtr, FBbt, FBdv, FBrf (e.g. FBgn0000490, FBgn999xyz)
+
+**Fly-exclusive gene names (absent in human):**
+- wg, hh, dpp, en, eve, ftz, vg, arm, sev, boss, ci, Dl, N (as Notch fly symbol), nkd, ptc, smo, cos2, fu, su(fu), puc, bsk, hep, Mst, yki, sd, ex, ft, ds, fj, mer, mats, wts, lats, sav, hpo
+
+**Fly-specific anatomy and tissue terms:**
+- fat body, wing disc, eye disc, leg disc, imaginal disc, ommatidia, ommatidium
+- bristle, chaeta, salivary gland polytene, polytene chromosome
+- cardia, proventriculus, Malpighian tubule, trachea (fly context), hemocyte
+- dorsal vessel, garland cell, ring gland, corpus allatum, corpus cardiacum
+
+**Fly-specific cell types:**
+- hemocyte, plasmatocyte, crystal cell, lamellocyte, oenocyte, tracheal cell, neuropil
+
+**Fly developmental and biological terms:**
+- larval stage, pupal stage, wandering larva, embryonic stage (with number), imaginal
+- metamorphosis (fly context), oogenesis (fly context), follicle cell, nurse cell, pole cell
+
+**Fly allele notation:**
+- Gene symbols with bracket suffixes: w[1118], p53[A], brca2[P1], ry[506]
+
+---
+
+CRITICAL RULE: A query may mix fly-specific and human-sounding gene/term names (e.g. cross-species comparisons, or fly genes like p53 that share names with human genes). If ANY absolute override signal above is present anywhere in the query, answer "fly". Ambiguous gene names like p53, Rb, E2f, brca2, Myc do NOT override a fly signal.
+
+Default to "human" ONLY when none of the above fly signals appear anywhere in the query.
 
 Query: {query}
 
