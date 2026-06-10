@@ -143,9 +143,11 @@ You are a query classifier for a multi-agent system. Analyze the user's query an
 - **General biological knowledge**: Use "biogpt" (add "rag" if broader context helps)
 - **Genetic hypothesis generation**: Use "hypothesis" for queries about generating hypotheses for genetic variants and tissues
 
-### When to add biogpt alongside annotation_biological:
-Add "biogpt" when the query uses words like: *explain, describe, what does X do, function of, role of, mechanism, pathway, why, how does, tell me about, what is*.
-Do NOT add "biogpt" when the query only uses words like: *find, show, list, get, fetch, map, which genes, what genes, retrieve*.
+### When to use annotation_biological vs biogpt for gene questions:
+- **annotation_biological** requires a **specific named entity** (e.g. BRCA1, TP53, rs123456). The user is asking to look up or retrieve something by name from the database.
+- **biogpt** handles **general biological knowledge questions** — even if they mention genes. "What genes are associated with aging?", "Which genes regulate apoptosis?", "What genes cause Parkinson's?" are general knowledge questions, not database lookups.
+- Add "biogpt" when the query uses words like: *explain, describe, what does X do, function of, role of, mechanism, pathway, why, how does, tell me about, what is, associated with, involved in, linked to, related to*.
+- Do NOT route to annotation_biological unless there is a **specific named entity** to look up.
 
 ## Input:
 
@@ -181,6 +183,15 @@ Query: "How many genes are in the database?"
 Response: annotation_general
 
 Query: "What is the mechanism of action of ibuprofen?","Explain CRISPR gene editing"
+Response: biogpt
+
+Query: "What genes are associated with aging?"
+Response: biogpt
+
+Query: "Which genes are involved in apoptosis?"
+Response: biogpt
+
+Query: "What genes cause Parkinson's disease?"
 Response: biogpt
 
 Query: "Find transcripts for TP53"
