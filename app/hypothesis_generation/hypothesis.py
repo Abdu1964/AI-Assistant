@@ -1,6 +1,5 @@
 from typing import Dict, Any, Tuple, Optional, List, Union
 from app.prompts.hypothesis_prompt import hypothesis_format_prompt, hypothesis_response
-# from app.storage.redis import redis_manager  # Redis disabled for testing
 from app.socket_manager import emit_to_user
 import logging
 import os
@@ -8,11 +7,6 @@ import difflib
 import requests
 import time
 
-# Configure logging with more detailed format
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # Load API endpoints from environment variables
@@ -37,13 +31,12 @@ class HypothesisGeneration:
         self.llm = llm
         logger.info("HypothesisGeneration initialized with LLM")
 
-    def _make_api_request(self, 
-                         method: str, 
-                         url: str, 
-                         token: str, 
-                         params: Optional[Dict] = None, 
-                         headers: Optional[Dict] = None,
-                         data:Optional[Dict] = None) -> Dict[str, Any]:
+    def _make_api_request(self,
+                         method: str,
+                         url: str,
+                         token: str,
+                         params: Optional[Dict] = None,
+                         data: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Helper method to make API requests with proper error handling.
         """
@@ -124,7 +117,6 @@ class HypothesisGeneration:
                 if attempt < max_retries - 1:
                     logger.info(f"Status is pending. Waiting {retry_delay} seconds before retrying...")
                     time.sleep(retry_delay)
-                    continue
                 else:
                     return {"error": "Enrichment timed out after maximum retries"}
             else:
@@ -200,16 +192,14 @@ class HypothesisGeneration:
                     response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
                     response.raise_for_status()
                     data = response.json()
-                    # redis_manager.create_graph(graph_id=data['hypothesis_id'], graph_summary=data['summary'])  # Redis disabled for testing
-                    # logger.info(f"Cached generated graph for graph id {data['resource']['id']}")
                     return data
-                except Exception as e:
+                except Exception:
                     logger.error(f"Failed to retrieve hypothesis by ID: {response}")
                     emit_to_user(user=user_id,message=f"Failed to retrieve hypothesis")
-                    return "NO summaries provided"
-        except Exception as e:
+                    return {"text": "NO summaries provided"}
+        except Exception:
             emit_to_user(user=user_id,message="Error retrieving hypothesis")
-            return None
+            return {}
 
     def format_user_query(self, query: str, user_id) -> Dict[str, Any]:
         """
@@ -276,19 +266,55 @@ class HypothesisGeneration:
             logger.error(f"Error fetching user projects: {e}")
             return []
 
+    @staticmethod
+    def _normalize_field(s: str) -> str:
+        normalized = s.lower().strip().replace(" ", "_").replace("-", "_")
+        normalized = normalized.replace("_tissue", "").replace("_cell", "").replace("_cells", "")
+        return normalized
+
+    def _match_project_fields(self, token: str, project: Dict[str, Any], variant: str, tissue: str):
+        """Fetch project details and return (has_variant, has_tissue, project_variants, project_tissues)."""
+        project_id = project.get("id")
+        url = f"{HYPOTHESIS_DATA_API}/projects"
+        details = self._make_api_request("GET", url, token, params={"id": project_id})
+        if "error" in details:
+            return False, False, [], []
+
+        project_variants = [h.get("variant") for h in details.get("hypotheses", [])]
+        project_tissues = [t.get("name") for t in details.get("ldsc", {}).get("tissues", [])]
+
+        norm_variant = self._normalize_field(variant)
+        norm_tissue = self._normalize_field(tissue)
+        has_variant = any(norm_variant == self._normalize_field(v) for v in project_variants)
+        has_tissue = any(norm_tissue == self._normalize_field(t) for t in project_tissues)
+        return has_variant, has_tissue, project_variants, project_tissues
+
+    def _collect_all_variants(self, token: str, projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Collect all available variants across all projects."""
+        all_variants = []
+        for project in projects:
+            project_id = project.get("id")
+            project_name = project.get("name")
+            url = f"{HYPOTHESIS_DATA_API}/projects"
+            details = self._make_api_request("GET", url, token, params={"id": project_id})
+            if "error" not in details:
+                for h in details.get("hypotheses", []):
+                    all_variants.append({"variant": h.get("variant"), "project_name": project_name})
+        return all_variants
+
     def validate_project_context(self, token: str, variant: str, tissue: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
         Phase 3 Validation: Check if the variant and tissue exist in the same project.
-        
+
         Returns:
             Tuple[Optional[str], Optional[Dict]]:
                 - First element: project_id if found, else None
                 - Second element: Error details if validation failed, else None
         """
         logger.info(f"Validating project context for Variant: {variant}, Tissue: {tissue}")
-        
+
         projects = self.get_user_projects(token)
-        
+
         # Scenario 1: No projects exist
         if not projects:
             logger.warning("No projects found for user.")
@@ -297,88 +323,58 @@ class HypothesisGeneration:
                 "variant": variant,
                 "tissue": tissue
             }
-        
+
         # Track which projects contain each component
         variant_found_in = []  # List of {project_id, project_name, variants, tissues}
         tissue_found_in = []   # List of {project_id, project_name, variants, tissues}
         searched_project_names = [] # Names of all projects searched
-            
+
         for project in projects:
             project_id = project.get("id")
             project_name = project.get("name")
             searched_project_names.append(project_name)
-            
-            # Fetch project details
-            url = f"{HYPOTHESIS_DATA_API}/projects"
-            details = self._make_api_request("GET", url, token, params={"id": project_id})
-            
-            if "error" in details:
-                continue
-            
-            # Extract variants and tissues from this project
-            project_variants = [h.get("variant") for h in details.get("hypotheses", [])]
-            project_tissues = [t.get("name") for t in details.get("ldsc", {}).get("tissues", [])]
-                
-            # Helper for flexible matching (lowercase, replace spaces/dashes with underscores)
-            def normalize(s: str) -> str:
-                normalized = s.lower().strip().replace(" ", "_").replace("-", "_")
-                # Strip common biological suffixes (e.g., "adipose_subcutaneous_tissue" -> "adipose_subcutaneous")
-                normalized = normalized.replace("_tissue", "").replace("_cell", "").replace("_cells", "")
-                return normalized
 
-            # Check if variant exists in this project (case-insensitive)
-            norm_variant = normalize(variant)
-            has_variant = any(norm_variant == normalize(v) for v in project_variants)
-            
-            # Check if tissue exists in this project (flexible matching)
-            norm_tissue = normalize(tissue)
-            has_tissue = any(norm_tissue == normalize(t) for t in project_tissues)
-            
+            has_variant, has_tissue, project_variants, project_tissues = self._match_project_fields(
+                token, project, variant, tissue
+            )
+            if not project_variants and not project_tissues:
+                continue
+
+            norm_variant = self._normalize_field(variant)
+            norm_tissue = self._normalize_field(tissue)
+
             # Track findings
             if has_variant:
                 # Find the actual variant name from the project for consistent suggesting
-                actual_v = next((v for v in project_variants if normalize(v) == norm_variant), variant)
+                actual_v = next((v for v in project_variants if self._normalize_field(v) == norm_variant), variant)
                 variant_found_in.append({
                     "project_id": project_id,
                     "project_name": project_name,
                     "actual_variant": actual_v,
                     "tissues": project_tissues
                 })
-            
+
             if has_tissue:
                 # Find the actual tissue name from the project
-                actual_t = next((t for t in project_tissues if normalize(t) == norm_tissue), tissue)
+                actual_t = next((t for t in project_tissues if self._normalize_field(t) == norm_tissue), tissue)
                 tissue_found_in.append({
                     "project_id": project_id,
                     "project_name": project_name,
                     "actual_tissue": actual_t,
                     "variants": project_variants
                 })
-            
+
             # Success case: Both found in same project
             if has_variant and has_tissue:
                 logger.info(f"Validation Successful: Found matched context in project {project_id}")
                 return project_id, None
-        
+
         # If we reach here, validation failed. Determine the specific error type.
         logger.warning("Validation Failed: No single project contains both variant and tissue.")
-        
+
         # Scenario 2: Variant not found anywhere
         if len(variant_found_in) == 0:
-            # Collect all available variants from all projects
-            all_variants = []
-            for project in projects:
-                project_id = project.get("id")
-                project_name = project.get("name")
-                url = f"{HYPOTHESIS_DATA_API}/projects"
-                details = self._make_api_request("GET", url, token, params={"id": project_id})
-                if "error" not in details:
-                    for h in details.get("hypotheses", []):
-                        all_variants.append({
-                            "variant": h.get("variant"),
-                            "project_name": project_name
-                        })
-            
+            all_variants = self._collect_all_variants(token, projects)
             return None, {
                 "error_type": "variant_not_found",
                 "variant": variant,
@@ -386,7 +382,7 @@ class HypothesisGeneration:
                 "all_variants": all_variants,
                 "searched_projects": searched_project_names
             }
-        
+
         # Scenario 3: Mismatch (variant and tissue exist, but in different projects)
         return None, {
             "error_type": "mismatch",
@@ -394,6 +390,98 @@ class HypothesisGeneration:
             "tissue": tissue,
             "variant_projects": variant_found_in,
             "tissue_projects": tissue_found_in
+        }
+
+    def _format_validation_error(self, error_details: Dict[str, Any]) -> Dict[str, Any]:
+        """Format a validation error dict into a user-facing text response."""
+        error_type = error_details.get("error_type")
+        variant = error_details.get("variant")
+        tissue = error_details.get("tissue")
+
+        if error_type == "no_projects":
+            return {"text": "Since there's no project created yet, you can use the platform UI to generate a new hypothesis. In the meantime, I can still assist you based on the hypotheses you've already generated."}
+
+        if error_type == "variant_not_found":
+            searched_projects = ", ".join(error_details.get("searched_projects", []))
+            all_variants = error_details.get("all_variants", [])
+            variant_list = "\n".join([f"- {v['variant']} ({v['project_name']})" for v in all_variants])
+            return {"text": (
+                f"No hypothesis is generated: I searched your projects ({searched_projects if searched_projects else 'none'}), "
+                f"but variant **{variant}** was not found.\n\n"
+                f"**Available variants:**\n{variant_list if variant_list else '(none)'}"
+            )}
+
+        if error_type == "mismatch":
+            variant_projects = error_details.get("variant_projects", [])
+            tissue_projects = error_details.get("tissue_projects", [])
+            variant_project_name = variant_projects[0]["project_name"] if variant_projects else "Unknown"
+            tissue_project_name = tissue_projects[0]["project_name"] if tissue_projects else "Unknown"
+            available_tissues = variant_projects[0]["tissues"] if variant_projects else []
+            tissue_list = "\n".join([f"- {t}" for t in available_tissues])
+            return {"text": (
+                f"No hypothesis is generated: **{variant}** is in {variant_project_name}, but **{tissue}** is in {tissue_project_name}.\n"
+                f"They must be in the same project.\n\n"
+                f"For **{variant}**, use these tissues:\n{tissue_list if tissue_list else '(none)'}"
+            )}
+
+        # Fallback (should not reach here)
+        return {"text": f"No hypothesis is generated: I couldn't find a project containing both **{variant}** and **{tissue}**."}
+
+    def _run_enrichment_pipeline(self, token: str, params: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+        """Run enrichment steps 1–4 and return the final hypothesis result or an error dict."""
+        # Step 1: Start Enrichment
+        emit_to_user(user=user_id, message=f"Starting enrichment for {params.get('variant')}...")
+        step1_res = self._step_1_enrich(token, params)
+        if "error" in step1_res:
+            logger.error(step1_res["error"])
+            return {"text": f"I tried to start the enrichment, but failed: {step1_res['error']}"}
+
+        hypothesis_id = step1_res["hypothesis_id"]
+
+        # Step 2: Polling
+        emit_to_user(user=user_id, message="Waiting for analysis to complete...")
+        step2_res = self._step_2_poll(token, hypothesis_id)
+        if "error" in step2_res:
+            logger.error(step2_res["error"])
+            return {"text": f"Enrichment started (ID: {hypothesis_id}), but failed during processing: {step2_res['error']}"}
+
+        enrich_id = step2_res["enrich_id"]
+
+        # Step 3: Get Results
+        emit_to_user(user=user_id, message="Fetching enrichment results...")
+        step3_res = self._step_3_get_results(token, enrich_id)
+        if "error" in step3_res:
+            logger.error(step3_res["error"])
+            return {"text": f"Analysis completed, but failed to retrieve results: {step3_res['error']}"}
+
+        # Select best GO term (Logic: Top Rank / Lowest P-value)
+        go_terms = step3_res.get("GO_terms", [])
+        if not go_terms:
+            return {"text": "Analysis completed, but no significant GO terms were found."}
+
+        best_go = go_terms[0]
+        best_go_id = best_go["id"]
+        best_go_name = best_go["name"]
+
+        emit_to_user(user=user_id, message=f"Identified top mechanism: {best_go_name}")
+
+        # Step 4: Final Generation
+        emit_to_user(user=user_id, message="Generating final hypothesis...")
+        step4_res = self._step_4_generate(token, enrich_id, best_go_id)
+        if "error" in step4_res:
+            logger.error(step4_res["error"])
+            return {"text": f"Failed to generate final hypothesis summary: {step4_res['error']}"}
+
+        summary = step4_res["summary"]
+        graph = step4_res["graph"]
+
+        return {
+            "text": summary,
+            "resource": {
+                "id": hypothesis_id,
+                "type": "hypothesis",
+                "graph": graph # pass graph data if needed by frontend
+            }
         }
 
     def generate_hypothesis(self, token: str, user_query: str, user_id: str) -> Dict[str, Any]:
@@ -407,7 +495,7 @@ class HypothesisGeneration:
         params = self.format_user_query(user_query, user_id)
         if not params:
             return {"text": "Could not understand the biological parameters in your query."}
-        
+
         # Ensure we have the minimum required fields
         if "variant" not in params or "tissue_name" not in params:
              # Fallback or ask for clarification? For now, error.
@@ -421,7 +509,7 @@ class HypothesisGeneration:
 
         # Validate Project Context (Phase 3)
         validated_project_id, error_details = self.validate_project_context(token, params["variant"], params["tissue_name"])
-        
+
         if validated_project_id:
              params["project_id"] = validated_project_id
              logger.info(f"Project context valid ation successful. Using project ID: {validated_project_id}")
@@ -430,109 +518,6 @@ class HypothesisGeneration:
         else:
              # Validation failed - format specific error message based on error type
              logger.warning(f"Project validation failed for {params['variant']} in {params['tissue_name']}")
-             
-             error_type = error_details.get("error_type")
-             variant = error_details.get("variant")
-             tissue = error_details.get("tissue")
-             
-             # Scenario 1: No projects exist
-             if error_type == "no_projects":
-                 error_message = "Since there’s no project created yet, you can use the platform UI to generate a new hypothesis. In the meantime, I can still assist you based on the hypotheses you’ve already generated."
-                 return {"text": error_message}
-             
-             # Scenario 2: Variant not found anywhere
-             elif error_type == "variant_not_found":
-                 searched_projects = ", ".join(error_details.get("searched_projects", []))
-                 all_variants = error_details.get("all_variants", [])
-                 variant_list = "\n".join([f"- {v['variant']} ({v['project_name']})" for v in all_variants])
-                 
-                 error_message = (
-                     f"No hypothesis is generated: I searched your projects ({searched_projects if searched_projects else 'none'}), "
-                     f"but variant **{variant}** was not found.\n\n"
-                     f"**Available variants:**\n{variant_list if variant_list else '(none)'}"
-                 )
-                 return {"text": error_message}
-             
-             # Scenario 3: Mismatch (variant in one project, tissue in another)
-             elif error_type == "mismatch":
-                 variant_projects = error_details.get("variant_projects", [])
-                 tissue_projects = error_details.get("tissue_projects", [])
-                 
-                 # Get the first project containing the variant (for the example message)
-                 variant_project_name = variant_projects[0]["project_name"] if variant_projects else "Unknown"
-                 tissue_project_name = tissue_projects[0]["project_name"] if tissue_projects else "Unknown"
-                 
-                 # Get available tissues for this variant
-                 available_tissues = variant_projects[0]["tissues"] if variant_projects else []
-                 tissue_list = "\n".join([f"- {t}" for t in available_tissues])
-                 
-                 error_message = (
-                     f"No hypothesis is generated: **{variant}** is in {variant_project_name}, but **{tissue}** is in {tissue_project_name}.\n"
-                     f"They must be in the same project.\n\n"
-                     f"For **{variant}**, use these tissues:\n{tissue_list if tissue_list else '(none)'}"
-                 )
-                 return {"text": error_message}
-             
-             # Fallback (should not reach here)
-             return {"text": f"No hypothesis is generated: I couldn't find a project containing both **{variant}** and **{tissue}**."}
+             return self._format_validation_error(error_details)
 
-        # Step 1: Start Enrichment
-        emit_to_user(user=user_id, message=f"Starting enrichment for {params.get('variant')}...")
-        step1_res = self._step_1_enrich(token, params)
-        if "error" in step1_res:
-            logger.error(step1_res["error"])
-            return {"text": f"I tried to start the enrichment, but failed: {step1_res['error']}"}
-        
-        hypothesis_id = step1_res["hypothesis_id"]
-
-        # Step 2: Polling
-        emit_to_user(user=user_id, message="Waiting for analysis to complete...")
-        step2_res = self._step_2_poll(token, hypothesis_id)
-        if "error" in step2_res:
-            logger.error(step2_res["error"])
-            return {"text": f"Enrichment started (ID: {hypothesis_id}), but failed during processing: {step2_res['error']}"}
-        
-        enrich_id = step2_res["enrich_id"]
-
-        # Step 3: Get Results
-        emit_to_user(user=user_id, message="Fetching enrichment results...")
-        step3_res = self._step_3_get_results(token, enrich_id)
-        if "error" in step3_res:
-             logger.error(step3_res["error"])
-             return {"text": f"Analysis completed, but failed to retrieve results: {step3_res['error']}"}
-        
-        # Select best GO term (Logic: Top Rank / Lowest P-value)
-        go_terms = step3_res.get("GO_terms", [])
-        if not go_terms:
-             return {"text": "Analysis completed, but no significant GO terms were found."}
-        
-        # Sort by rank or p-value just to be safe, though API returns sorted
-        # Mock API returns them. Let's pick the first one.
-        best_go = go_terms[0]
-        best_go_id = best_go["id"]
-        best_go_name = best_go["name"]
-        
-        emit_to_user(user=user_id, message=f"Identified top mechanism: {best_go_name}")
-
-        # Step 4: Final Generation
-        emit_to_user(user=user_id, message="Generating final hypothesis...")
-        step4_res = self._step_4_generate(token, enrich_id, best_go_id)
-        if "error" in step4_res:
-            logger.error(step4_res["error"])
-            return {"text": f"Failed to generate final hypothesis summary: {step4_res['error']}"}
-
-        # Success!
-        summary = step4_res["summary"]
-        graph = step4_res["graph"]
-        
-        # Cache result - Redis disabled for testing
-        # redis_manager.create_graph(graph_id=hypothesis_id, graph_summary=summary)
-
-        return {
-            "text": summary,
-            "resource": {
-                "id": hypothesis_id,
-                "type": "hypothesis",
-                "graph": graph # pass graph data if needed by frontend
-            }
-        }
+        return self._run_enrichment_pipeline(token, params, user_id)

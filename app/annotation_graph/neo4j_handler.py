@@ -2,7 +2,6 @@ import logging
 from typing import List
 from neo4j import GraphDatabase
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class Neo4jConnection:

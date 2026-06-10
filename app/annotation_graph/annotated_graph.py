@@ -167,6 +167,26 @@ class Graph:
             }
 
     def _detect_organism(self, query) -> str:
+        q_lower = query.lower()
+        fly_keywords = [
+            # organism names
+            "drosophila", "melanogaster", "dmel", "fruit fly", "fly schema",
+            # flybase id prefixes
+            "fbgn", "fbal", "fbtr", "fbbt", "fbdv", "fbrf",
+            # fly-exclusive gene names (absent in human)
+            " wg ", " hh ", " dpp ", " arm ", " ci ", " nkd ", " ptc ", " smo ",
+            " bsk ", " hep ", " yki ", " sd ", " eve ", " ftz ", " vg ",
+            " en ", " sev ", " boss ", " cos2 ", " puc ", " lats ", " wts ",
+            # fly anatomy / tissue / cell terms
+            "wing disc", "eye disc", "leg disc", "imaginal disc",
+            "fat body", "hemocyte", "plasmatocyte", "crystal cell",
+            "oenocyte", "malpighian", "salivary gland polytene",
+            "dorsal vessel", "ring gland", "follicle cell", "nurse cell",
+            # fly cell lines
+            "s2 cell",
+        ]
+        if any(kw in q_lower for kw in fly_keywords):
+            return "fly"
         try:
             prompt = ORGANISM_DETECTION_PROMPT.format(query=query)
             result = self.llm.generate(prompt)
@@ -1067,10 +1087,10 @@ class Graph:
         try:
             # Detect organism and select the right schema + Neo4j resources
             organism = self._detect_organism(query)
-            if organism == "fly" and self.fly_schema_handler and self.fly_neo4j:
+            if organism == "fly" and self.fly_schema_handler:
                 active_schema = self.fly_enhanced_schema
                 active_schema_handler = self.fly_schema_handler
-                active_neo4j = self.fly_neo4j
+                active_neo4j = self.fly_neo4j if self.fly_neo4j else self.neo4j
                 logger.info("Organism detected: fly — using fly schema and Neo4j")
             else:
                 organism = "human"

@@ -158,33 +158,24 @@ class JsonToCypherConverter:
 
         return f"MATCH {', '.join(path_patterns)}", rel_vars
 
+    def _build_property_conditions(self, properties):
+        conditions = []
+        for key, value in properties.items():
+            if value and str(value).strip():
+                conditions.append(f"{key}: '{self._sanitize_value(value)}'")
+        return conditions
+
     def _build_node_pattern(self, node):
         node_id = node["node_id"]
         node_type = node["type"]
-
-        # Handle database ID vs properties
         if node["id"] and node["id"].strip():
-            # Database ID provided
-            return (
-                f"({node_id}:{node_type} {{id: '{self._sanitize_value(node['id'])}'}})"
-            )
-        else:
-            # No database ID, use properties if any
-            properties = node["properties"]
-            if properties and any(v for v in properties.values() if v):
-                # Has properties, build property conditions
-                prop_conditions = []
-                for key, value in properties.items():
-                    if value and str(value).strip():
-                        prop_conditions.append(
-                            f"{key}: '{self._sanitize_value(value)}'"
-                        )
-
-                if prop_conditions:
-                    return f"({node_id}:{node_type} {{{', '.join(prop_conditions)}}})"
-
-            # No properties or all empty, just match by type
-            return f"({node_id}:{node_type})"
+            return f"({node_id}:{node_type} {{id: '{self._sanitize_value(node['id'])}'}})"
+        properties = node["properties"]
+        if properties and any(v for v in properties.values() if v):
+            prop_conditions = self._build_property_conditions(properties)
+            if prop_conditions:
+                return f"({node_id}:{node_type} {{{', '.join(prop_conditions)}}})"
+        return f"({node_id}:{node_type})"
 
     def _build_where_clause(self, nodes):
         conditions = []

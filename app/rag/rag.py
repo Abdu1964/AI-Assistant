@@ -12,9 +12,6 @@ from app.storage.mongo_storage import mongo_db_manager
 from app.rag.utils.web_search import SimpleWebSearch
 
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +34,15 @@ class RAG:
         self.content_analyzer = ContentAnalyzer(self.llm)
         logger.info(
             "RAG initialized with LLM and shared Qdrant client/embedding model."
+        )
+
+    def _chunk_and_store(self, collection_name, chunks, metadata):
+        return self.client.upsert_data(
+            collection_name=collection_name,
+            data=None,
+            is_content=True,
+            chunks=chunks,
+            metadata=metadata,
         )
 
     def save_doc_to_rag(
@@ -65,50 +71,35 @@ class RAG:
         :param content_id: Content ID (for content data)
         """
         if is_content and not is_web:
-            if pdf_path and file_name and user_id and content_id:
-                chunks = self.content_processor.process_pdf(pdf_path)
-                metadata = {
-                    "content_id": content_id,
-                    "filename": file_name,
-                    "user_id": user_id,
-                    "content_type": "pdf",
-                }
-                return self.client.upsert_data(
-                    collection_name=collection_name,
-                    data=None,
-                    is_content=True,
-                    chunks=chunks,
-                    metadata=metadata,
-                )
-            else:
+            if not (pdf_path and file_name and user_id and content_id):
                 logger.error("Missing required parameters for PDF processing")
                 return None
+            chunks = self.content_processor.process_pdf(pdf_path)
+            metadata = {
+                "content_id": content_id,
+                "filename": file_name,
+                "user_id": user_id,
+                "content_type": "pdf",
+            }
+            return self._chunk_and_store(collection_name, chunks, metadata)
         elif is_web:
-            if web_content and user_id and content_id:
-                result = self.content_processor.process_web_content(
-                    web_content.get("metadata", {}).get("url", "")
-                )
-                if not result:
-                    logger.error("Failed to process web content")
-                    return None
-
-                metadata = {
-                    "content_id": content_id,
-                    "url": web_content.get("metadata", {}).get("url", ""),
-                    "title": web_content.get("metadata", {}).get("title", ""),
-                    "user_id": user_id,
-                    "content_type": "web",
-                }
-                return self.client.upsert_data(
-                    collection_name=collection_name,
-                    data=None,
-                    is_content=True,
-                    chunks=result["chunks"],
-                    metadata=metadata,
-                )
-            else:
+            if not (web_content and user_id and content_id):
                 logger.error("Missing required parameters for web content processing")
                 return None
+            result = self.content_processor.process_web_content(
+                web_content.get("metadata", {}).get("url", "")
+            )
+            if not result:
+                logger.error("Failed to process web content")
+                return None
+            metadata = {
+                "content_id": content_id,
+                "url": web_content.get("metadata", {}).get("url", ""),
+                "title": web_content.get("metadata", {}).get("title", ""),
+                "user_id": user_id,
+                "content_type": "web",
+            }
+            return self._chunk_and_store(collection_name, result["chunks"], metadata)
         else:
             # Handle sample/general data using unified upsert_data method
             if isinstance(data, list) and all(isinstance(d, dict) for d in data):
@@ -204,12 +195,14 @@ class RAG:
                     content_type="pdf",
                     filename=file.filename,
                     num_pages=num_pages,
-                    file_size=file_size,
                     upload_time=upload_time,
                     summary=analysis.get("summary"),
                     keywords=str(analysis.get("keywords", [])),
                     topics=str(analysis.get("topics", [])),
-                    suggested_questions=str(analysis.get("suggested_questions", [])),
+                    metadata={
+                        "file_size": file_size,
+                        "suggested_questions": str(analysis.get("suggested_questions", [])),
+                    },
                 )
 
             # Add memory for the upload
@@ -304,13 +297,13 @@ class RAG:
                     url=url,
                     title=web_content["metadata"].get("title") or None,
                     author=web_content["metadata"].get("author") or None,
-                    publish_date=None,
-                    file_size=None,
                     upload_time=upload_time,
                     summary=analysis.get("summary"),
                     keywords=str(analysis.get("keywords", [])),
                     topics=str(analysis.get("topics", [])),
-                    suggested_questions=str(analysis.get("suggested_questions", [])),
+                    metadata={
+                        "suggested_questions": str(analysis.get("suggested_questions", [])),
+                    },
                 )
 
             # Add memory for the upload

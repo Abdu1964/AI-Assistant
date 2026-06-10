@@ -29,108 +29,103 @@ class GalaxyHandler:
         logger.info(f"get_galaxy_info called with query='{query}', user_id='{user_id}', urls={urls}")
         try:
             if urls and query:
-                return self._handle_files(query=query, user_id=user_id, urls=urls)
+                return self._handle_files(query=query, urls=urls)
             else:
                 logger.info("No urls provided, routing to MCP handler")
-                return self._handle_mcp(query, token)  # ← was: self.handle_mcp (missing underscore)
+                return self._handle_mcp(query, token)
         except Exception as e:
             logger.error(f"Galaxy handler failed: {e}")
             traceback.print_exc()
             return {"text": f"Error processing Galaxy request: {e}"}
 
-    def _handle_files(self, query, user_id, urls):
-        """Handle file-based queries using RAG - supports multiple URLs"""
-        logger.info(f"_handle_files called with urls={urls}")
-
-        if isinstance(urls, str):
-            urls = [urls]
-
-        if not urls:
-            return {"text": "No urls provided for analysis."}
-
+    def _collection_exists(self):
         try:
-            processor = HTMLProcessor(self.qdrant_client, self.llm)
+            collection_info = self.qdrant_client.client.get_collection(self.collection_name)
+            logger.info(f"Collection '{self.collection_name}' exists with {collection_info.points_count} points")
+            return True
+        except Exception:
+            logger.info(f"Collection '{self.collection_name}' does not exist yet")
+            return False
 
-            collection_exists = False
-            try:
-                collection_info = self.qdrant_client.client.get_collection(self.collection_name)
-                collection_exists = True
-                logger.info(f"Collection '{self.collection_name}' exists with {collection_info.points_count} points")
-            except Exception:
-                logger.info(f"Collection '{self.collection_name}' does not exist yet")
+    def _check_url_stored(self, query, url):
+        try:
+            stored = self.qdrant_client.retrieve_similar_content(
+                collection_name=self.collection_name,
+                query=query,
+                content_ids=[url],
+                filter=True
+            )
+            logger.info(f"Stored chunks for {url}: {len(stored) if stored else 0}")
+            return bool(stored)
+        except Exception as e:
+            logger.warning(f"Error checking URL {url}: {e}")
+            return False
 
-            urls_to_process = []
-            if collection_exists:
-                for url in urls:
-                    logger.info(f"Checking if URL exists: {url}")
-                    try:
-                        stored = self.qdrant_client.retrieve_similar_content(
-                            collection_name=self.collection_name,
-                            query=query,
-                            content_ids=[url],
-                            filter=True
-                        )
-                        logger.info(f"Stored chunks for {url}: {len(stored) if stored else 0}")
-                        if not stored:
-                            logger.info(f"URL not found in collection, will process: {url}")
-                            urls_to_process.append(url)
-                        else:
-                            logger.info(f"URL already in collection: {url}")
-                    except Exception as e:
-                        logger.warning(f"Error checking URL {url}: {e}")
-                        urls_to_process.append(url)
+    def _find_urls_to_process(self, query, urls):
+        if not self._collection_exists():
+            logger.info("Collection doesn't exist, will process all URLs")
+            return urls.copy()
+        urls_to_process = []
+        for url in urls:
+            logger.info(f"Checking if URL exists: {url}")
+            if self._check_url_stored(query, url):
+                logger.info(f"URL already in collection: {url}")
             else:
-                logger.info("Collection doesn't exist, will process all URLs")
-                urls_to_process = urls.copy()
+                logger.info(f"URL not found in collection, will process: {url}")
+                urls_to_process.append(url)
+        return urls_to_process
 
-            if urls_to_process:
-                logger.info(f"Processing {len(urls_to_process)} new URLs")
-                storage_results = processor.store_embedded(
-                    urls=urls_to_process,
-                    collection_name=self.collection_name
-                )
-                for url, result in storage_results.items():
-                    logger.info(f"Storage result for {url}: {result}")
+    def _store_new_urls(self, processor, urls_to_process):
+        if not urls_to_process:
+            logger.info("All URLs already exist in collection")
+            return None
+        logger.info(f"Processing {len(urls_to_process)} new URLs")
+        storage_results = processor.store_embedded(
+            urls=urls_to_process,
+            collection_name=self.collection_name
+        )
+        for url, result in storage_results.items():
+            logger.info(f"Storage result for {url}: {result}")
+        successful_urls = [url for url, result in storage_results.items()
+                           if "Successfully processed" in result]
+        if not successful_urls:
+            logger.error("Failed to process any URLs")
+            failed_reasons = [f"{url}: {result}" for url, result in storage_results.items()]
+            return {"text": "Failed to extract content from provided documents:\n" + "\n".join(failed_reasons)}
+        return None
 
-                successful_urls = [url for url, result in storage_results.items()
-                                   if "Successfully processed" in result]
-                if not successful_urls:
-                    logger.error("Failed to process any URLs")
-                    failed_reasons = [f"{url}: {result}" for url, result in storage_results.items()]
-                    return {"text": "Failed to extract content from provided documents:\n" + "\n".join(failed_reasons)}
-            else:
-                logger.info("All URLs already exist in collection")
+    def _retrieve_similar_content(self, query, urls):
+        logger.info(f"Retrieving similar content for query: '{query}' from {len(urls)} URLs")
+        try:
+            results = self.qdrant_client.retrieve_similar_content(
+                collection_name=self.collection_name,
+                query=query,
+                content_ids=urls,
+                top_k=10
+            )
+            return results, None
+        except Exception as e:
+            logger.error(f"Error retrieving similar content: {e}")
+            return None, {"text": f"Error retrieving content: {e}"}
 
-            logger.info(f"Retrieving similar content for query: '{query}' from {len(urls)} URLs")
-            try:
-                similar_results = self.qdrant_client.retrieve_similar_content(
-                    collection_name=self.collection_name,
-                    query=query,
-                    content_ids=urls,
-                    top_k=10
-                )
-            except Exception as e:
-                logger.error(f"Error retrieving similar content: {e}")
-                return {"text": f"Error retrieving content: {e}"}
-
-            if similar_results:
-                logger.info(f"Found {len(similar_results)} relevant chunks")
-
-                results_by_url = {}
-                for chunk in similar_results:
-                    url = chunk.get("content_id", "Unknown")
-                    if url not in results_by_url:
-                        results_by_url[url] = []
-                    results_by_url[url].append(chunk)
-
-                context_parts = []
-                for url, chunks in results_by_url.items():
-                    url_context = f"\n--- From {url} ---\n"
-                    url_context += "\n\n".join(str(chunk.get("text", "")) for chunk in chunks)
-                    context_parts.append(url_context)
-
-                context_text = "\n\n".join(context_parts)
-                llm_prompt = f"""
+    def _build_response(self, query, urls, similar_results):
+        if not similar_results:
+            logger.warning("No relevant chunks found in collection")
+            return f"I could not find any relevant information in the provided {len(urls)} document(s) to answer your query."
+        logger.info(f"Found {len(similar_results)} relevant chunks")
+        results_by_url = {}
+        for chunk in similar_results:
+            url = chunk.get("content_id", "Unknown")
+            if url not in results_by_url:
+                results_by_url[url] = []
+            results_by_url[url].append(chunk)
+        context_parts = []
+        for url, chunks in results_by_url.items():
+            url_context = f"\n--- From {url} ---\n"
+            url_context += "\n\n".join(str(chunk.get("text", "")) for chunk in chunks)
+            context_parts.append(url_context)
+        context_text = "\n\n".join(context_parts)
+        llm_prompt = f"""
 You are an expert AI assistant. You are given the following context extracted from {len(urls)} document(s):
 
 {context_text}
@@ -144,13 +139,25 @@ Please provide a clear, professional, and concise answer to the user's query bas
 - Keep the response clear and concise
 - If relevant, you can mention which document(s) the information comes from
 """
-                response_text = self.llm.generate(llm_prompt)
-            else:
-                logger.warning("No relevant chunks found in collection")
-                response_text = f"I could not find any relevant information in the provided {len(urls)} document(s) to answer your query."
+        return self.llm.generate(llm_prompt)
 
-            return {"text": response_text}
-
+    def _handle_files(self, query, urls):
+        """Handle file-based queries using RAG - supports multiple URLs"""
+        logger.info(f"_handle_files called with urls={urls}")
+        if isinstance(urls, str):
+            urls = [urls]
+        if not urls:
+            return {"text": "No urls provided for analysis."}
+        try:
+            processor = HTMLProcessor(self.qdrant_client, self.llm)
+            urls_to_process = self._find_urls_to_process(query, urls)
+            error = self._store_new_urls(processor, urls_to_process)
+            if error:
+                return error
+            similar_results, error = self._retrieve_similar_content(query, urls)
+            if error:
+                return error
+            return {"text": self._build_response(query, urls, similar_results)}
         except Exception as e:
             logger.error(f"Galaxy file analyzer failed: {e}")
             traceback.print_exc()
@@ -244,11 +251,11 @@ asyncio.run(run_mcp())
                     return {"text": response}
                 else:
                     logger.error(f"Subprocess failed: {result.stderr}")
-                    raise Exception(f"Subprocess error: {result.stderr}")
+                    raise RuntimeError(f"Subprocess error: {result.stderr}")
             finally:
                 try:
                     os.unlink(script_path)
-                except Exception:
+                except OSError:
                     pass
 
         except subprocess.TimeoutExpired:

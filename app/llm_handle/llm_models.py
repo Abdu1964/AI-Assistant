@@ -9,15 +9,13 @@ from sentence_transformers import SentenceTransformer
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 GEMINI_EMBEDDING_MODEL = "models/text-embedding-004"
+JSON_CODEBLOCK_MARKER = "```json"
 api = os.getenv("OPENAI_API_KEY")
 gemini_api = os.getenv("GEMINI_API_KEY")
 
@@ -31,7 +29,6 @@ def openai_embedding_model(batch):
 
     for i in range(0, len(batch), batch_size):
         batch_segment = batch[i : i + batch_size]
-        print(batch_segment)
         logger.info(
             f"Embedding batch {i // batch_size + 1} of {len(batch) // batch_size + 1}"
         )
@@ -58,7 +55,6 @@ def gemini_embedding_model(batch):
 
     for i in range(0, len(batch), batch_size):
         batch_segment = batch[i : i + batch_size]
-        print(batch_segment)
         logger.info(
             f"Embedding batch {i // batch_size + 1} of {len(batch) // batch_size + 1}"
         )
@@ -160,7 +156,7 @@ class LocalModel(LLMInterface):
             return json_content
 
     def _extract_json_from_codeblock(self, content: str) -> str:
-        start = content.find("```json")
+        start = content.find(JSON_CODEBLOCK_MARKER)
         end = content.rfind("```")
         if start != -1 and end != -1:
             return content[start + 7 : end].strip()
@@ -191,7 +187,7 @@ class GeminiModel(LLMInterface):
             return json_content
 
     def _extract_json_from_codeblock(self, content: str) -> str:
-        start = content.find("```json")
+        start = content.find(JSON_CODEBLOCK_MARKER)
         end = content.rfind("```")
         if start != -1 and end != -1:
             return content[start + 7 : end].strip()
@@ -231,7 +227,7 @@ class OpenAIModel(LLMInterface):
             return json_content
 
     def _extract_json_from_codeblock(self, content: str) -> str:
-        start = content.find("```json")
+        start = content.find(JSON_CODEBLOCK_MARKER)
         end = content.rfind("```")
         if start != -1 and end != -1:
             json_content = content[start + 7 : end].strip()
