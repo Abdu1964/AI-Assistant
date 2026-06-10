@@ -9,13 +9,12 @@ import requests
 from dotenv import load_dotenv
 from app.prompts.summarizer_prompts import SUMMARY_PROMPT, SUMMARY_PROMPT_BASED_ON_USER_QUERY,SUMMARY_PROMPT_CHUNKING,SUMMARY_PROMPT_CHUNKING_USER_QUERY
 from app.storage.redis import redis_manager
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 
-class Graph_Summarizer:
+class GraphSummarizer:
     """
     Handles graph-related operations like processing nodes, edges, generating responses ...
     """
@@ -39,7 +38,7 @@ class Graph_Summarizer:
 
         formatted_lines = []
         for line in lines:
-            sentences = re.split(r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s", line)
+            sentences = re.split(r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=[.?])\s", line)
             for sentence in sentences:
                 formatted_lines.append(sentence + "\n")
         formatted_desc = " ".join(formatted_lines).strip()
@@ -77,7 +76,7 @@ class Graph_Summarizer:
             desc_parts.append(f"{key.capitalize()}: {value}")
         return " | ".join(desc_parts)
 
-    def generate_grouped_descriptions(self, edges, nodes, batch_size=50):
+    def generate_grouped_descriptions(self, edges, nodes):
         grouped_edges = self.group_edges_by_source(edges)
         descriptions = []
 
@@ -139,52 +138,48 @@ class Graph_Summarizer:
             grouped_batched_descriptions.append(self.current_batch)
         return grouped_batched_descriptions
 
+    def _build_limited_graph_descriptions(self, graph, limited_nodes):
+        limited_node_ids = set()
+        for i in range(min(limited_nodes, len(graph["nodes"]))):
+            limited_node_ids.add(graph["nodes"][i]["data"]["id"])
+
+        limited_nodes_data = [
+            node for node in graph["nodes"] if node["data"]["id"] in limited_node_ids
+        ]
+        limited_edges_data = [
+            edge
+            for edge in graph["edges"]
+            if (
+                edge["data"]["source"] in limited_node_ids
+                and edge["data"]["target"] in limited_node_ids
+            )
+        ]
+
+        limited_graph = {"nodes": limited_nodes_data, "edges": limited_edges_data}
+        nodes = {node["data"]["id"]: node["data"] for node in limited_graph["nodes"]}
+
+        edges = []
+        if len(limited_graph["edges"]) > 0:
+            edges = [
+                {
+                    "source": edge["data"]["source"],
+                    "target": edge["data"]["target"],
+                    "label": edge["data"]["label"],
+                }
+                for edge in limited_graph["edges"]
+            ]
+
+        self.description = self.generate_grouped_descriptions(edges, nodes)
+        self.descriptions = self.num_tokens_from_string("cl100k_base")
+
     def graph_description(self, graph, limited_nodes=100):
         if not graph:
             self.descriptions = "no graph is returned"
             return self.descriptions
 
-        limited_node_ids = set()
         if isinstance(graph, dict) and "nodes" in graph:
             if len(graph["nodes"]):
-                for i in range(min(limited_nodes, len(graph["nodes"]))):
-                    limited_node_ids.add(graph["nodes"][i]["data"]["id"])
-
-                limited_nodes_data = [
-                    node
-                    for node in graph["nodes"]
-                    if node["data"]["id"] in limited_node_ids
-                ]
-                limited_edges_data = []
-                for edge in graph["edges"]:
-                    if (
-                        edge["data"]["source"] in limited_node_ids
-                        and edge["data"]["target"] in limited_node_ids
-                    ):
-                        limited_edges_data.append(edge)
-
-                limited_graph = {
-                    "nodes": limited_nodes_data,
-                    "edges": limited_edges_data,
-                }
-                nodes = {
-                    node["data"]["id"]: node["data"] for node in limited_graph["nodes"]
-                }
-
-                if len(limited_graph["edges"]) > 0:
-                    edges = [
-                        {
-                            "source": edge["data"]["source"],
-                            "target": edge["data"]["target"],
-                            "label": edge["data"]["label"],
-                        }
-                        for edge in limited_graph["edges"]
-                    ]
-
-                self.description = self.generate_grouped_descriptions(
-                    edges, nodes, batch_size=10
-                )
-                self.descriptions = self.num_tokens_from_string("cl100k_base")
+                self._build_limited_graph_descriptions(graph, limited_nodes)
             else:
                 self.descriptions = []
 
@@ -330,15 +325,12 @@ class Graph_Summarizer:
                         prompt = SUMMARY_PROMPT_BASED_ON_USER_QUERY.format(
                             description=batch, user_query=user_query
                         )
-                        print("prompt", prompt)
                     else:
                         prompt = SUMMARY_PROMPT.format(description=batch)
-                        print("prompt", prompt)
+                    logger.debug(f"Summarization prompt: {prompt}")
 
                 response = self.llm.generate(prompt)
                 prev_summery = [response]
                 return {"text": prev_summery}
-                # cleaned_desc = self.clean_and_format_response(prev_summery)
-                # return cleaned_desc
-        except:
+        except Exception:
             traceback.print_exc()

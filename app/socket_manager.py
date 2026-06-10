@@ -10,7 +10,6 @@ import asyncio
 from app.lib.auth import socket_token_required
 from app.storage.redis import redis_manager
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -82,66 +81,60 @@ def register_socket_events(socketio_instance):
             emit('response', {'response': f'user {user_id} joined room'}, room=user_id)
 
 
+    def _handle_question_processing(data, sid):
+        query = data.get('question')
+        user_id = session['user_id']
+        token = session['token']
+
+        if not (user_id and query):
+            logger.error("Invalid question data received")
+            emit('error', {'error': 'Invalid question data'})
+            return
+
+        logger.info(f"Received question from {user_id}: {query}")
+
+        try:
+            global user
+            user = user_id
+            from flask import current_app
+            ai_assistant = current_app.config['ai_assistant']
+
+            ai_assistant.socketio = socketio_instance
+
+            try:
+                import inspect
+                if hasattr(ai_assistant, 'assistant') and inspect.iscoroutinefunction(ai_assistant.assistant):
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        responses = loop.run_until_complete(
+                            ai_assistant.assistant(
+                                query=query,
+                                user_id=user_id,
+                                token=token
+                            )
+                        )
+                        loop.close()
+                    except Exception as async_e:
+                        logger.error(f"Async execution failed: {async_e}")
+                        responses = {"text": "Error processing request"}
+                else:
+                    responses = ai_assistant.agent(query, user_id, token)
+
+                logger.info(f"Responses generated for user {user_id}: {responses}")
+
+            except Exception as e:
+                logger.error(f"Error processing question: {e}")
+                socketio_instance.emit('error', {'error': str(e)}, room=user_id)
+
+        except Exception as e:
+            logger.error(f"Error setting up question processing: {e}")
+            emit('error', {'error': 'Failed to process question'}, room=user_id)
+
     @socketio_instance.on('question')
     def handle_question(data):
         """Handle incoming questions from clients."""
-        query = data.get('question')
-        graph_id = data.get('graph_id')
-        user_id = session['user_id']
-        token = session['token']
-        
-        if user_id and query:
-            logger.info(f"Received question from {user_id}: {query}")
-            
-            try:
-                global user
-                user = user_id
-                from flask import current_app
-                ai_assistant = current_app.config['ai_assistant']
-                
-                # Pass the socketio instance to the assistant
-                ai_assistant.socketio = socketio_instance
-                
-                # Simplified processing - no double fallback
-                def process_question():
-                    try:
-                        # Check if the method is async
-                        import inspect
-                        if hasattr(ai_assistant, 'assistant') and inspect.iscoroutinefunction(ai_assistant.assistant):
-                            # Handle async method
-                            try:
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                responses = loop.run_until_complete(
-                                    ai_assistant.assistant(
-                                        query=query,
-                                        user_id=user_id,
-                                        token=token
-                                    )
-                                )
-                                loop.close()
-                            except Exception as async_e:
-                                logger.error(f"Async execution failed: {async_e}")
-                                responses = {"text": "Error processing request"}
-                        else:
-                            # Handle sync method - use agent method directly
-                            responses = ai_assistant.agent(query, user_id, token)
-                        
-                        logger.info(f"Responses generated for user {user_id}: {responses}")
-                                            
-                    except Exception as e:
-                        logger.error(f"Error processing question: {e}")
-                        socketio_instance.emit('error', {'error': str(e)}, room=user_id)
-                
-                # Process the question
-                process_question()
-                
-            except Exception as e:
-                logger.error(f"Error setting up question processing: {e}")
-                emit('error', {'error': 'Failed to process question'}, room=user_id)
-        else:
-            logger.error("Invalid question data received")
-            emit('error', {'error': 'Invalid question data'})
+        _handle_question_processing(data, None)
 # Make socketio instance available globally
 def get_socketio():
     return socketio

@@ -41,6 +41,33 @@ class MemoryManager:
         """
         return self.client._retrieve_memory(user_id, embedding)
 
+    def _build_memory_entry(self, resp, user_id, new_message_embeddings, temp_uuid_mapping):
+        data = resp["text"]
+        event = resp["event"]
+        if event == "ADD":
+            memory_id = self.client._create_memory_update_memory(
+                user_id=user_id,
+                data=data,
+                embedding=new_message_embeddings[data],
+            )
+            return {"id": memory_id, "memory": data, "event": event}
+        if event == "UPDATE":
+            self.client._create_memory_update_memory(
+                user_id=user_id,
+                memory_id=temp_uuid_mapping[resp["id"]],
+                data=data,
+                embedding=new_message_embeddings[data],
+            )
+            return {
+                "id": temp_uuid_mapping[resp["id"]],
+                "memory": data,
+                "event": event,
+                "previous_memory": resp["old_memory"],
+            }
+        if event == "NONE":
+            logger.debug("NOOP for Memory.")
+        return None
+
     def add_memory(self, messages, user_id):
         try:
             """
@@ -56,7 +83,6 @@ class MemoryManager:
             else:
                 messages = []
 
-            metadata = {}
             system_prompt, user_prompt = self.get_fact_retrieval_message(messages)
             response = self.llm.generate(user_prompt, system_prompt)
 
@@ -96,39 +122,13 @@ class MemoryManager:
             returned_memories = []
 
             for resp in new_memories_with_actions["memory"]:
-                data = resp["text"]
-                if resp["event"] == "ADD":
-                    memory_id = self.client._create_memory_update_memory(
-                        user_id=user_id,
-                        data=data,
-                        embedding=new_message_embeddings[data],
-                        metadata=metadata,
-                    )
-                    returned_memories.append(
-                        {"id": memory_id, "memory": data, "event": resp["event"]}
-                    )
+                entry = self._build_memory_entry(
+                    resp, user_id, new_message_embeddings, temp_uuid_mapping
+                )
+                if entry is not None:
+                    returned_memories.append(entry)
 
-                elif resp["event"] == "UPDATE":
-                    self.client._create_memory_update_memory(
-                        user_id=user_id,
-                        memory_id=temp_uuid_mapping[resp["id"]],
-                        data=data,
-                        embedding=new_message_embeddings[data],
-                        metadata=metadata,
-                    )
-                    returned_memories.append(
-                        {
-                            "id": temp_uuid_mapping[resp["id"]],
-                            "memory": data,
-                            "event": resp["event"],
-                            "previous_memory": resp["old_memory"],
-                        }
-                    )
-
-                elif resp["event"] == "NONE":
-                    print("NOOP for Memory.")
-
-            print("returned memories are ", returned_memories)
+            logger.debug(f"Returned memories: {returned_memories}")
             return returned_memories
-        except:
-            traceback.print_exc()
+        except Exception:
+            logger.error("Failed to add memory", exc_info=True)

@@ -38,7 +38,7 @@ class ContentProcessor:
 
     def markdown_to_clean_text(self, markdown_text):
         markdown_text = re.sub(
-            r"^#{1}\s+(.+)$", r"\1:", markdown_text, flags=re.MULTILINE
+            r"^#\s+(.+)$", r"\1:", markdown_text, flags=re.MULTILINE
         )  # H1
         markdown_text = re.sub(
             r"^#{2}\s+(.+)$", r"\1:", markdown_text, flags=re.MULTILINE
@@ -268,6 +268,14 @@ class ContentProcessor:
             return []
         return self.chunk_by_sections(text)
 
+    def _flush_section(self, chunks, section_text):
+        if not section_text.strip():
+            return
+        if len(section_text) > 1000:
+            chunks.extend(self.chunk_text_recursive(section_text))
+        else:
+            chunks.append(section_text.strip())
+
     def chunk_by_sections(self, text):
         chunks = []
         section_patterns = [
@@ -279,25 +287,14 @@ class ContentProcessor:
         sections = re.split(f"({combined_pattern})", text, flags=re.MULTILINE)
         current_section = ""
 
-        for i, section in enumerate(sections):
+        for section in sections:
             if re.match(combined_pattern, section):
-                if current_section.strip():
-                    if len(current_section) > 1000:
-                        sub_chunks = self.chunk_text_recursive(current_section)
-                        chunks.extend(sub_chunks)
-                    else:
-                        chunks.append(current_section.strip())
+                self._flush_section(chunks, current_section)
                 current_section = section
             else:
                 current_section += section
 
-        if current_section.strip():
-            if len(current_section) > 1000:
-                sub_chunks = self.chunk_text_recursive(current_section)
-                chunks.extend(sub_chunks)
-            else:
-                chunks.append(current_section.strip())
-
+        self._flush_section(chunks, current_section)
         return chunks
 
     def chunk_text_recursive(self, text):

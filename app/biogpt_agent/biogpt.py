@@ -43,17 +43,10 @@ class BioGPTAgentOpenVINO:
         process = psutil.Process(os.getpid())
         return process.memory_info().rss / (1024 * 1024)
 
-    def _manage_cache_size(self, limit_gb=5.0):
-        """Enforces a size limit on the cache directory by deleting oldest files."""
-        cache_dir = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-        if not os.path.exists(cache_dir):
-            return
-
-        limit_bytes = limit_gb * 1024 * 1024 * 1024
+    def _scan_cache_files(self, cache_dir: str):
+        """Scans cache_dir recursively and returns (files, total_size)."""
         files = []
         total_size = 0
-
-        # 1. Scan all files
         for dirpath, _, filenames in os.walk(cache_dir):
             for f in filenames:
                 fp = os.path.join(dirpath, f)
@@ -63,19 +56,29 @@ class BioGPTAgentOpenVINO:
                     files.append((stat.st_mtime, stat.st_size, fp))
                 except OSError:
                     continue
+        return files, total_size
 
-        # 2. Check if cleanup is needed
+    def _manage_cache_size(self, limit_gb=5.0):
+        """Enforces a size limit on the cache directory by deleting oldest files."""
+        cache_dir = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+        if not os.path.exists(cache_dir):
+            return
+
+        limit_bytes = limit_gb * 1024 * 1024 * 1024
+        files, total_size = self._scan_cache_files(cache_dir)
+
+        # Check if cleanup is needed
         if total_size > limit_bytes:
             logger.warning(f"Cache size ({total_size/1e9:.2f}GB) exceeds limit ({limit_gb}GB). Cleaning up...")
-            
-            # 3. Sort by oldest modified time first
+
+            # Sort by oldest modified time first
             files.sort(key=lambda x: x[0])
-            
+
             deleted_size = 0
             for _, size, fp in files:
                 if total_size - deleted_size <= limit_bytes:
                     break # Target reached
-                
+
                 try:
                     os.remove(fp)
                     deleted_size += size

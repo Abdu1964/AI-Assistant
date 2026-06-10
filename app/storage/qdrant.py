@@ -11,9 +11,6 @@ MAX_MEMORY_LIMIT = 10
 USER_COLLECTION = os.getenv("USER_COLLECTION", "USER_COLLECTIONS")
 USER_MEMORY_NAME = "user memories"
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -37,7 +34,7 @@ class Qdrant:
                 prefer_grpc=False,
             )
             logger.info(f"qdrant connected to {qdrant_url} (REST API)")
-        except:
+        except Exception:
             logger.error("qdrant connection is failed")
 
     def _get_embeddings(self, texts):
@@ -99,6 +96,68 @@ class Qdrant:
             )
             return False
 
+    def _upsert_content_data(self, collection_name, chunks, metadata):
+        if chunks is None or metadata is None:
+            raise ValueError("chunks and metadata are required for content data")
+
+        self.ensure_collection_exists(collection_name)
+        meta = metadata or {}
+
+        for i in range(0, len(chunks), self.batch_size):
+            batch_chunks = chunks[i : i + self.batch_size]
+            embeddings = self._get_embeddings(batch_chunks)
+
+            points = []
+            for text, emb in zip(batch_chunks, embeddings):
+                point_id = str(uuid.uuid4())
+                points.append(
+                    models.PointStruct(
+                        id=point_id, vector=emb, payload={**meta, "text": text}
+                    )
+                )
+            self.client.upsert(collection_name=collection_name, points=points)
+
+        logger.info("Content chunks saved")
+        return "Content Data Successfully Uploaded"
+
+    def _upsert_general_data(self, collection_name, data):
+        if data is None or not isinstance(data, list):
+            raise ValueError("data must be a list of dictionaries for non-content data")
+
+        self.ensure_collection_exists(collection_name)
+
+        for item in data:
+            if "content" in item:
+                text = item["content"]
+            elif "text" in item:
+                text = item["text"]
+            elif "description" in item:
+                text = item["description"]
+            else:
+                text = str(item)
+
+            embedding = self._get_embeddings([text])[0]
+
+            payload = {
+                # "text": text,
+                "source": "sample_data",
+                **item,
+            }
+
+            point_id = item.get("id", str(uuid.uuid4()))
+
+            self.client.upsert(
+                collection_name=collection_name,
+                points=[
+                    models.PointStruct(
+                        id=point_id, vector=embedding, payload=payload
+                    )
+                ],
+            )
+
+        logger.info("Sample data saved")
+        return "Sample Data Successfully Uploaded"
+
     def upsert_data(
         self,
         collection_name,
@@ -119,81 +178,9 @@ class Qdrant:
         """
         try:
             if is_content:
-                # Handle content data using chunks and metadata
-                if chunks is None or metadata is None:
-                    raise ValueError(
-                        "chunks and metadata are required for content data"
-                    )
-
-                self.ensure_collection_exists(collection_name)
-                meta = metadata or {}
-
-                # embed in batches to avoid big payloads
-                for i in range(0, len(chunks), self.batch_size):
-                    batch_chunks = chunks[i : i + self.batch_size]
-                    embeddings = self._get_embeddings(batch_chunks)
-
-                    points = []
-                    for text, emb in zip(batch_chunks, embeddings):
-                        # unique ID per chunk
-                        point_id = str(uuid.uuid4())
-                        points.append(
-                            models.PointStruct(
-                                id=point_id, vector=emb, payload={**meta, "text": text}
-                            )
-                        )
-                    self.client.upsert(collection_name=collection_name, points=points)
-
-                logger.info("Content chunks saved")
-                return "Content Data Successfully Uploaded"
+                return self._upsert_content_data(collection_name, chunks, metadata)
             else:
-                # Handle general data (list of dicts)
-                if data is None or not isinstance(data, list):
-                    raise ValueError(
-                        "data must be a list of dictionaries for non-content data"
-                    )
-
-                self.ensure_collection_exists(collection_name)
-
-                # Process each item in the data list
-                for item in data:
-                    # Extract text content from the item - prioritize 'content' field for sample data
-                    if "content" in item:
-                        text = item["content"]
-                    elif "text" in item:
-                        text = item["text"]
-                    elif "description" in item:
-                        text = item["description"]
-                    else:
-                        # If no standard field, convert the whole item to string
-                        text = str(item)
-
-                    # Generate embedding for this text
-                    embedding = self._get_embeddings([text])[0]
-
-                    # Create payload with the item data and source info
-                    payload = {
-                        # "text": text,
-                        "source": "sample_data",
-                        **item,
-                    }
-
-                    # Use the item's existing ID if available, otherwise generate a new one
-                    point_id = item.get("id", str(uuid.uuid4()))
-
-                    # Upsert this single point
-                    self.client.upsert(
-                        collection_name=collection_name,
-                        points=[
-                            models.PointStruct(
-                                id=point_id, vector=embedding, payload=payload
-                            )
-                        ],
-                    )
-
-                logger.info("Sample data saved")
-                return "Sample Data Successfully Uploaded"
-
+                return self._upsert_general_data(collection_name, data)
         except Exception as e:
             traceback.print_exc()
             logger.error(f"Error saving: {e}")
@@ -205,7 +192,6 @@ class Qdrant:
         user_id=None,
         content_ids=None,
         top_k=10,
-        filter=None,
     ):
         """
         Unified retrieval method for Qdrant. Supports filtering by user_id, content_ids, or combinations.
@@ -282,7 +268,7 @@ class Qdrant:
             return []
 
     def _create_memory_update_memory(
-        self, user_id, data, embedding, metadata, memory_id=None
+        self, user_id, data, embedding, memory_id=None
     ):
 
         self.ensure_collection_exists(USER_COLLECTION)
@@ -335,7 +321,7 @@ class Qdrant:
             
             logger.info("collection updated")
             return memory_id
-        except:
+        except Exception:
             traceback.print_exc()
 
     def _delete_memory(self, memory_id):

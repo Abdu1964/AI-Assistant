@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 class SimpleWebSearch:
     def __init__(self) -> None:
+        # intentionally empty; subclass initialization not required
         pass
 
     def get_context_urls(self, query: str, num_results: int = 3) -> List[str]:

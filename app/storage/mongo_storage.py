@@ -105,7 +105,7 @@ class MongoManager:
                 "updated_at": datetime.utcnow(),
             }
 
-            result = self.user_info_collection.insert_one(user_info)
+            self.user_info_collection.insert_one(user_info)
             logger.info(f"Created history with question_id: {user_info['question_id']}")
             
             return user_info.get("question_id")
@@ -205,6 +205,22 @@ class MongoManager:
             logger.error(f"Error getting latest pending JSON: {e}")
             return None
 
+    def _parse_memory_record(self, record):
+        memory = None
+        if record.get("memory"):
+            try:
+                memory_data = json.loads(record["memory"])
+                if "content" in memory_data:
+                    content = memory_data["content"]
+                    memory = json.loads(content) if isinstance(content, str) else content
+                else:
+                    memory = memory_data
+            except (json.JSONDecodeError, TypeError):
+                memory = None
+        if memory in [None, []]:
+            memory = ""
+        return memory
+
     def get_context_and_memory(self, user_id: str):
         try:
             cursor = (
@@ -217,22 +233,7 @@ class MongoManager:
 
             result = []
             for record in records:
-                # Parse memory if exists
-                memory = None
-                if record.get("memory"):
-                    try:
-                        memory_data = json.loads(record["memory"])
-                        if "content" in memory_data:
-                            content = memory_data["content"]
-                            memory = json.loads(content) if isinstance(content, str) else content
-                        else:
-                            memory = memory_data
-                    except (json.JSONDecodeError, TypeError):
-                        memory = None
-
-                if memory in [None, []]:
-                    memory = ""
-
+                memory = self._parse_memory_record(record)
                 result.append({
                     "question": record.get("user_question", ""),
                     "context": {
@@ -257,16 +258,15 @@ class MongoManager:
         url: str = None,
         title: str = None,
         author: str = None,
-        publish_date: datetime = None,
-        file_size: float = None,
         upload_time: datetime = None,
         summary: str = None,
         keywords: str = None,
         topics: str = None,
-        suggested_questions: str = None,
+        metadata: dict = None,
     ):
         """Add a content file record"""
         try:
+            meta = metadata or {}
             content_file = {
                 "user_id": user_id,
                 "content_id": content_id,
@@ -276,13 +276,13 @@ class MongoManager:
                 "url": url,
                 "title": title,
                 "author": author,
-                "publish_date": publish_date,
-                "file_size": file_size,
+                "publish_date": meta.get("publish_date"),
+                "file_size": meta.get("file_size"),
                 "upload_time": upload_time or datetime.utcnow(),
                 "summary": summary,
                 "keywords": keywords,
                 "topics": topics,
-                "suggested_questions": suggested_questions,
+                "suggested_questions": meta.get("suggested_questions"),
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
             }
