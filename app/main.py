@@ -75,6 +75,7 @@ class AgentState(TypedDict):
     # Parallel execution control
     agents_to_run: List[str]
     agents_completed: Annotated[List[str], operator.add]
+    stop_pipeline: Optional[bool]
 
 
 class AiAssistance:
@@ -203,14 +204,36 @@ class AiAssistance:
         content_ids = state.get("content_ids")
         graph_id = state.get("graph_id")
         urls = state.get("urls")
+        resource = state.get("resource")
+
+        # If the client explicitly set resource="hypothesis", skip LLM classification.
+        # - graph_id present: query an existing hypothesis via content_retrieval_agent → get_by_hypothesis_id
+        # - no graph_id: generate a new hypothesis via hypothesis_agent
+        if resource == "hypothesis":
+            if graph_id:
+                logger.info("Resource='hypothesis' + graph_id — routing to content_retrieval_agent")
+                return {
+                    "query_types": ["hypothesis_generation"],
+                    "agents_to_run": ["content_retrieval_agent"],
+                    "agents_completed": [],
+                    "messages": [HumanMessage(content="Query classified as: hypothesis_generation")],
+                }
+            else:
+                logger.info("Resource='hypothesis' + no graph_id — routing to hypothesis_agent")
+                return {
+                    "query_types": ["hypothesis_generation"],
+                    "agents_to_run": ["hypothesis_agent"],
+                    "agents_completed": [],
+                    "messages": [HumanMessage(content="Query classified as: hypothesis_generation")],
+                }
 
         # Fetch content summaries
         content_summaries = self.get_content_summaries(user_id, content_ids)
         logger.info(f"Classifying query: {query}")
-        
+
         classifier_prompt_text = main_classifier_prompt.format(
-            query=query, 
-            content_summaries=content_summaries, 
+            query=query,
+            content_summaries=content_summaries,
         )
         response = self.advanced_llm.generate(classifier_prompt_text).lower()
         logger.info(f"question classified as {response}")
@@ -265,6 +288,10 @@ class AiAssistance:
 
         for qtype in query_types:
             agent = type_to_agent.get(qtype)
+            # Never run annotation_agent when graph_id is present — the user is
+            # asking about an existing graph, not requesting a new annotation.
+            if agent == "annotation_agent" and graph_id:
+                continue
             if agent and agent not in agents_to_run:
                 agents_to_run.append(agent)
 
@@ -290,15 +317,20 @@ class AiAssistance:
         Determine which agent to run next.
         Returns the next agent to run, or 'aggregator' if all agents have completed.
         """
+        # Short-circuit: an agent signalled that no further processing is needed
+        if state.get("stop_pipeline"):
+            logger.info("stop_pipeline flag set — skipping remaining agents, going to aggregator")
+            return "aggregator"
+
         agents_to_run = state.get("agents_to_run", [])
         agents_completed = state.get("agents_completed", [])
-        
+
         # Find the next agent that hasn't been completed
         for agent in agents_to_run:
             if agent not in agents_completed:
                 logger.info(f"Running next agent: {agent}")
                 return agent
-        
+
         # All agents completed, move to aggregator
         logger.info("All agents completed, moving to aggregator")
         return "aggregator"
@@ -539,10 +571,45 @@ class AiAssistance:
                 )
                 if graph_summary:
                     graph_text = graph_summary.get("text", str(graph_summary)) if isinstance(graph_summary, dict) else str(graph_summary)
-                    content_parts.append({
-                        "source": f"graph:{graph_id}",
-                        "content": graph_text
-                    })
+                    # Don't pass error messages as content for the LLM to explain
+                    if graph_text and not graph_text.startswith("Failed to contact") and not graph_text.startswith("Error"):
+                        content_parts.append({
+                            "source": f"graph:{graph_id}",
+                            "content": graph_text
+                        })
+                    elif graph_text:
+                        logger.warning(f"Graph fetch failed for {graph_id}: {graph_text}")
+                        # Try to find the last relevant annotation/graph topic from history
+                        last_topic = None
+                        try:
+                            history = self.store.get_context_and_memory(user_id)
+                            for item in reversed(history):
+                                agents_used = item.get("context", {}).get("agents_used", [])
+                                if "annotation_agent" in agents_used:
+                                    last_topic = item.get("question")
+                                    break
+                        except Exception:
+                            pass
+                        if last_topic:
+                            confirmation_text = (
+                                f"I couldn't find the graph you referenced (ID: `{graph_id}`). "
+                                f"Did you mean to ask about your previous annotation: *\"{last_topic}\"*? "
+                                f"Or would you like to ask a different question?"
+                            )
+                        else:
+                            confirmation_text = (
+                                f"I couldn't find the graph you referenced (ID: `{graph_id}`). "
+                                f"Please check that the graph exists, or let me know what you'd like to explore."
+                            )
+                        return {
+                            "content_retrieval_response": {
+                                "text": confirmation_text,
+                                "json_format": None,
+                                "sources": []
+                            },
+                            "agents_completed": ["content_retrieval_agent"],
+                            "stop_pipeline": True,
+                        }
                     sources.append(f"graph:{graph_id}")
 
             # Galaxy urls
@@ -668,6 +735,7 @@ class AiAssistance:
         agent_outputs = []
         json_format = None
         validation_report = {}
+        organism = None
 
         # ---------------- Annotation Agent ----------------
         annotation_resp = state.get("annotation_response")
@@ -684,7 +752,7 @@ class AiAssistance:
             text_content = annotation_resp.get("text") or annotation_resp.get("summary") or ""
             json_format = annotation_resp.get("json_format")
             validation_report = annotation_resp.get("validation_report", {})
-            organism = annotation_resp.get("organism", "human")
+            organism = annotation_resp.get("organism") if json_format else None
 
             # When the pipeline returns json_format but no text (e.g. Cypher execution
             # commented out), build the validation/substitution text from the json_format
@@ -908,6 +976,8 @@ class AiAssistance:
                 "galaxy_response": None,
                 "biogpt_response": None,
                 "content_retrieval_response": None,
+                "hypothesis_response": None,
+                "stop_pipeline": False,
                 "agents_to_run": [],
                 "agents_completed": [],
             }
@@ -1000,6 +1070,7 @@ class AiAssistance:
                 memory=memory,
                 query=query,
                 conversation_history=history,
+                graph_id=graph_id or "",
             )
             logger.info("Advanced llm response")
             response = self.advanced_llm.generate(prompt)
