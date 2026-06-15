@@ -349,7 +349,6 @@ class RAG:
                     user_id=user_id,
                     content_ids=content_ids,
                     top_k=10,
-                    filter=True,
                 )
             else:
                 # General collection
@@ -357,7 +356,6 @@ class RAG:
                     collection_name=VECTOR_COLLECTION,
                     query=query_str,
                     top_k=10,
-                    filter=False,
                 )
         except Exception as e:
             logger.error(f"An error occurred during query processing: {e}")

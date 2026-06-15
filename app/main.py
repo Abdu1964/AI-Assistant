@@ -58,6 +58,8 @@ class AgentState(TypedDict):
     content_retrieval_response: Optional[Dict[str, Any]]
     biogpt_response:Optional[Dict[str, Any]]
     hypothesis_response: Optional[Dict[str, Any]]
+    pubmed_response: Optional[Dict[str, Any]]
+    clinical_trials_response: Optional[Dict[str, Any]]
     # Parallel execution control
     agents_to_run: List[str]
     agents_completed: Annotated[List[str], operator.add]
@@ -119,6 +121,8 @@ class AiAssistance:
         workflow.add_node("biogpt_agent", self._biogpt_agent)
         workflow.add_node("aggregator", self._aggregate_responses)
         workflow.add_node("finalizer", self._finalize_response)
+        workflow.add_node("pubmed_agent", self._pubmed_agent)
+        workflow.add_node("clinical_trials_agent", self._clinical_trials_agent)
 
         # Define edges
         workflow.set_entry_point("classifier")
@@ -135,6 +139,8 @@ class AiAssistance:
                 "galaxy_agent": "galaxy_agent",
                 "content_retrieval_agent": "content_retrieval_agent",
                 "biogpt_agent": "biogpt_agent",
+                "pubmed_agent": "pubmed_agent",
+                "clinical_trials_agent": "clinical_trials_agent",
                 "aggregator": "aggregator",
                 "error" : "finalizer"
             },
@@ -147,6 +153,8 @@ class AiAssistance:
         workflow.add_edge("content_retrieval_agent", "router")
         workflow.add_edge("biogpt_agent", "router")
         workflow.add_edge("hypothesis_agent", "router")
+        workflow.add_edge("pubmed_agent", "router")
+        workflow.add_edge("clinical_trials_agent", "router")
         # Aggregator flows to finalizer
         workflow.add_edge("aggregator", "finalizer")
         workflow.add_edge("finalizer", END)
@@ -202,6 +210,8 @@ class AiAssistance:
             query_types.append("hypothesis_generation")
         if "biogpt" in qtype and "biogpt" not in query_types:
             query_types.append("biogpt")
+        if "literature" in qtype and "literature" not in query_types:
+            query_types.append("literature")
 
     def _build_agent_list(self, query_types: list, content_ids, urls, graph_id) -> list:
         agents_to_run = []
@@ -216,11 +226,18 @@ class AiAssistance:
             "biogpt": "biogpt_agent",
         }
         for qtype in query_types:
+            if qtype == "literature":
+                # Literature queries: RAG + PubMed + ClinicalTrials together
+                for agent in ("rag_agent", "pubmed_agent", "clinical_trials_agent"):
+                    if agent not in agents_to_run:
+                        agents_to_run.append(agent)
+                continue
             agent = type_to_agent.get(qtype)
             if agent == "annotation_agent" and graph_id:
                 continue
             if agent and agent not in agents_to_run:
                 agents_to_run.append(agent)
+
         if not agents_to_run:
             agents_to_run.append("rag_agent")
         return agents_to_run
@@ -414,20 +431,35 @@ class AiAssistance:
                 user_id=state["user_id"],
             )
 
-            return {
-                "hypothesis_response": response,  
-                "messages": [AIMessage(content=f"Hypothesis generated: {response.get('text')}")],
+            hypothesis_text = response.get("text", "")
+            # A real hypothesis always returns resource: {id, type, graph} — all fallback/failure paths omit it
+            succeeded = isinstance(response.get("resource"), dict) and response["resource"].get("type") == "hypothesis"
+
+            state_update = {
+                "hypothesis_response": response,
+                "messages": [AIMessage(content=f"Hypothesis generated: {hypothesis_text}")],
                 "agents_completed": ["hypothesis_agent"],
             }
-       
+
+            if succeeded:
+                current_agents = state.get("agents_to_run", [])
+                extra = [a for a in ("clinical_trials_agent", "pubmed_agent") if a not in current_agents]
+                if extra:
+                    logger.info(f"Hypothesis succeeded — injecting literature agents: {extra}")
+                    state_update["agents_to_run"] = current_agents + extra
+
+            return state_update
+
         except Exception as e:
             logger.error("Error in hypothesis agent", exc_info=True)
             return {
-                "hypothesis_response": {"text": f"Error generating hypothesis: {str(e)}", "resource": None},
+                "hypothesis_response": {
+                    "text": "The hypothesis service is not returning any results at the moment. There is nothing I can help with for this request.",
+                    "resource": None,
+                },
+                "stop_pipeline": True,
                 "error": str(e),
-                "messages": [
-                    AIMessage(content=f"Error in hypothesis generation: {str(e)}")
-                ],
+                "messages": [AIMessage(content=f"Error in hypothesis generation: {str(e)}")],
                 "agents_completed": ["hypothesis_agent"],
             }
 
@@ -450,11 +482,25 @@ class AiAssistance:
             if response and isinstance(response, dict) and "text" in response:
                 response_text = response["text"]
             else:
-                response_text = str(response) if response else "No response generated"
+                response_text = str(response) if response else ""
             logger.debug(f"RAG response: {response_text}")
+
+            # No useful results → inject PubMed as fallback
+            if self._rag_has_no_results(response_text):
+                current_agents = state.get("agents_to_run", [])
+                if "pubmed_agent" not in current_agents:
+                    logger.info("RAG found no results — injecting pubmed_agent as fallback")
+                    emit_to_user(user=state["user_id"], message="Nothing found in knowledge base, searching PubMed...")
+                    return {
+                        "rag_response": {"text": response_text, "json_format": None, "source": KNOWLEDGE_BASE},
+                        "agents_to_run": current_agents + ["pubmed_agent"],
+                        "agents_completed": ["rag_agent"],
+                        "messages": [AIMessage(content="RAG found no results — triggering PubMed fallback")],
+                    }
+
             return {
                 "rag_response": {
-                    "text": response_text, 
+                    "text": response_text,
                     "json_format": None,
                     "source": KNOWLEDGE_BASE
                 },
@@ -673,6 +719,112 @@ class AiAssistance:
                 "error": str(e)
             }
 
+    _NO_RESULT_PHRASES = (
+        "couldn't find", "could not find", "no relevant", "no information",
+        "no results", "not found", "no documents", "unable to find",
+        "no data", "i don't have information", "i do not have",
+        "no specific", "no details",
+    )
+
+    def _rag_has_no_results(self, text: str) -> bool:
+        t = text.lower().strip()
+        return len(t) < 120 or any(p in t for p in self._NO_RESULT_PHRASES)
+
+    def _extract_search_term(self, user_query: str, context: str = "") -> str:
+        """Distil a question (and optional context) into a concise API-friendly search term."""
+        context_line = f"\nAdditional context: {context[:500]}" if context else ""
+        prompt = (
+            "Extract a short, keyword-based search term (3-7 words) suitable for searching "
+            "PubMed or ClinicalTrials.gov. Focus on the biological topic, gene, drug, or condition. "
+            "Do NOT include words like: clinical trials, studies, papers, literature, search, find, pubmed, research. "
+            "Do NOT use only a variant rs number — expand to the gene name and condition it is associated with. "
+            "Return ONLY the search term, no explanation, no punctuation.\n\n"
+            f"User question: {user_query}{context_line}\n\nSearch term:"
+        )
+        try:
+            term = self.basic_llm.generate(prompt).strip().strip('"').strip("'")
+            logger.info(f"Extracted search term: '{term}'")
+            return term if term else user_query
+        except Exception:
+            return user_query
+
+    def _pubmed_agent(self, state: AgentState) -> Dict[str, Any]:
+        from app.rag.literature import search_pubmed
+        user_id = state["user_id"]
+        hypothesis = state.get("hypothesis_response") or {}
+        context = hypothesis.get("text", "")
+        search_term = self._extract_search_term(state["user_query"], context=context)
+        logger.info(f"PubMed agent searching for: {search_term}")
+        try:
+            emit_to_user(user=user_id, message="Searching PubMed literature...")
+            result = search_pubmed(search_term, max_results=8)
+            papers = result.get("papers", [])
+            if not papers:
+                text = "No relevant publications found in PubMed for this query."
+            else:
+                lines = [f"Found {len(papers)} relevant paper(s) from PubMed:\n"]
+                for p in papers:
+                    authors = ", ".join(p.get("authors", [])) or "Unknown authors"
+                    lines.append(
+                        f"- **{p.get('title', 'No title')}** ({p.get('year', '')}) — {authors}\n"
+                        f"  {p.get('abstract', '')}\n"
+                        f"  URL: {p.get('url', '')}"
+                    )
+                text = "\n".join(lines)
+            return {
+                "pubmed_response": {"text": text, "source": "PubMed", "items": papers},
+                "agents_completed": ["pubmed_agent"],
+                "messages": [AIMessage(content="PubMed search completed")],
+            }
+        except Exception as e:
+            logger.error(f"PubMed agent error: {e}", exc_info=True)
+            return {
+                "pubmed_response": {"text": f"PubMed search unavailable: {str(e)}", "source": "PubMed", "items": []},
+                "agents_completed": ["pubmed_agent"],
+            }
+
+    def _clinical_trials_agent(self, state: AgentState) -> Dict[str, Any]:
+        from app.rag.literature import search_clinical_trials
+        user_id = state["user_id"]
+        hypothesis = state.get("hypothesis_response") or {}
+        context = hypothesis.get("text", "")
+        search_term = self._extract_search_term(state["user_query"], context=context)
+        logger.info(f"ClinicalTrials agent searching for: {search_term}")
+        try:
+            emit_to_user(user=user_id, message="Searching ClinicalTrials.gov...")
+            result = search_clinical_trials(search_term, status="RECRUITING", max_results=5)
+            trials = result.get("trials", [])
+            if not trials:
+                result = search_clinical_trials(search_term, status="", max_results=5)
+                trials = result.get("trials", [])
+            if not trials:
+                text = "No clinical trials found for this query on ClinicalTrials.gov."
+            else:
+                lines = [f"Found {len(trials)} clinical trial(s) on ClinicalTrials.gov:\n"]
+                for t in trials:
+                    phase = ", ".join(t.get("phase", [])) or "N/A"
+                    conditions = ", ".join(t.get("conditions", [])) or "N/A"
+                    interventions = ", ".join(t.get("interventions", [])) or "N/A"
+                    lines.append(
+                        f"- **{t.get('title', 'No title')}** ({t.get('nct_id', '')})\n"
+                        f"  Phase: {phase} | Status: {t.get('status', '')} | Started: {t.get('start_date', 'N/A')}\n"
+                        f"  Conditions: {conditions}\n"
+                        f"  Interventions: {interventions}\n"
+                        f"  URL: {t.get('url', '')}"
+                    )
+                text = "\n".join(lines)
+            return {
+                "clinical_trials_response": {"text": text, "source": "ClinicalTrials.gov", "items": trials},
+                "agents_completed": ["clinical_trials_agent"],
+                "messages": [AIMessage(content="ClinicalTrials search completed")],
+            }
+        except Exception as e:
+            logger.error(f"ClinicalTrials agent error: {e}", exc_info=True)
+            return {
+                "clinical_trials_response": {"text": f"ClinicalTrials search unavailable: {str(e)}", "source": "ClinicalTrials.gov",  "items": []},
+                "agents_completed": ["clinical_trials_agent"],
+            }
+
     def _format_annotation_section(self, failed: list) -> str:
         missing_parts = []
         for n in failed:
@@ -698,6 +850,32 @@ class AiAssistance:
         if failed:
             text += self._format_annotation_section(failed)
         return text
+
+    def _build_sources_footer(self, state: dict) -> str:
+        """Build a markdown Sources section with clickable links from PubMed and ClinicalTrials."""
+        sections = []
+
+        pubmed_resp = state.get("pubmed_response")
+        if pubmed_resp:
+            papers = pubmed_resp.get("items", [])
+            links = [
+                f"- [{p.get('title', p.get('pmid', 'Article'))}]({p['url']})"
+                for p in papers if p.get("url")
+            ]
+            if links:
+                sections.append("**PubMed Sources:**\n" + "\n".join(links))
+
+        clinical_resp = state.get("clinical_trials_response")
+        if clinical_resp:
+            trials = clinical_resp.get("items", [])
+            links = [
+                f"- [{t.get('title', t.get('nct_id', 'Trial'))} ({t.get('nct_id', '')})]({t['url']})"
+                for t in trials if t.get("url")
+            ]
+            if links:
+                sections.append("**ClinicalTrials.gov Sources:**\n" + "\n".join(links))
+
+        return "\n\n".join(sections)
 
     def _aggregate_annotation_response(self, annotation_resp: dict, agent_outputs: list) -> tuple:
         if annotation_resp.get("needs_confirmation"):
@@ -735,13 +913,6 @@ class AiAssistance:
                 agent_outputs.append({"agent": "biogpt_agent", "source": biogpt_resp.get("source", "biogpt"), "content": text_content})
 
         resource_to_save = state.get("resource")
-        hyp_resp = state.get("hypothesis_response")
-        if hyp_resp:
-            text_content = hyp_resp.get("text", "")
-            if text_content:
-                agent_outputs.append({"agent": "hypothesis_agent", "source": "hypothesis generator", "content": text_content})
-            if hyp_resp.get("resource"):
-                resource_to_save = hyp_resp.get("resource")
 
         content_resp = state.get("content_retrieval_response")
         if content_resp:
@@ -754,6 +925,18 @@ class AiAssistance:
                 sources = content_resp.get("sources", ["external content"])
                 agent_outputs.append({"agent": "content_retrieval_agent", "source": ", ".join(sources), "content": content_parts})
 
+        pubmed_resp = state.get("pubmed_response")
+        if pubmed_resp:
+            text_content = pubmed_resp.get("text", "")
+            if text_content:
+                agent_outputs.append({"agent": "pubmed_agent", "source": pubmed_resp.get("source", "PubMed"), "content": text_content})
+
+        clinical_trials_resp = state.get("clinical_trials_response")
+        if clinical_trials_resp:
+            text_content = clinical_trials_resp.get("text", "")
+            if text_content:
+                agent_outputs.append({"agent": "clinical_trials_agent", "source": clinical_trials_resp.get("source", "ClinicalTrials.gov"), "content": text_content})
+
         return resource_to_save
 
     def _aggregate_responses(self, state: AgentState) -> Dict[str, Any]:
@@ -762,6 +945,35 @@ class AiAssistance:
         Ensures that text content is combined coherently and structured JSON data (json_format)
         is always included when available.
         """
+        # If an agent already set a final response (e.g. hypothesis failure with stop_pipeline),
+        # return it directly without re-aggregating.
+        if state.get("stop_pipeline") and state.get("response", {}).get("text"):
+            logger.info("stop_pipeline with pre-built response — skipping aggregation")
+            return {"response": state["response"]}
+
+        # Hypothesis fast-path — bypass LLM aggregation entirely
+        hyp_resp = state.get("hypothesis_response") or {}
+        if hyp_resp:
+            hyp_succeeded = isinstance(hyp_resp.get("resource"), dict) and hyp_resp["resource"].get("type") == "hypothesis"
+            if hyp_succeeded:
+                # Success: return hypothesis text + supporting literature links
+                hyp_text = hyp_resp.get("text", "")
+                sources_footer = self._build_sources_footer(state)
+                final_text = hyp_text.rstrip()
+                if sources_footer:
+                    final_text += "\n\n" + sources_footer
+                return {
+                    "response": {"text": final_text, "json_format": None, "organism": None},
+                    "resource": hyp_resp.get("resource"),
+                }
+            else:
+                # Soft failure (no project, validation failed) — return module message as-is
+                # Hard failure (exception) routes through literature fallback instead, so hyp_text here is always a user-facing message
+                hyp_text = hyp_resp.get("text") or "The hypothesis service is not returning any results at the moment. There is nothing I can help with directly, but I can search for similar clinical trials and published research — please try asking about the topic directly."
+                return {
+                    "response": {"text": hyp_text, "json_format": None, "organism": None},
+                }
+
         user_query = state.get("user_query", "")
         logger.info("Aggregating responses from multiple agents with source attribution")
 
@@ -833,6 +1045,10 @@ class AiAssistance:
 
             aggregated_text = self.advanced_llm.generate(prompt)
             logger.info(f"Successfully aggregated response: {aggregated_text[:100]}...")
+
+            sources_footer = self._build_sources_footer(state)
+            if sources_footer:
+                aggregated_text = aggregated_text.rstrip() + "\n\n" + sources_footer
 
             return {
                 "response": {
@@ -921,6 +1137,8 @@ class AiAssistance:
                 "biogpt_response": None,
                 "content_retrieval_response": None,
                 "hypothesis_response": None,
+                "pubmed_response": None,
+                "clinical_trials_response": None,
                 "stop_pipeline": False,
                 "agents_to_run": [],
                 "agents_completed": [],
