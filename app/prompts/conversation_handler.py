@@ -15,6 +15,7 @@ Available tools/agents:
 - annotation: Answer factual biological queries about genes, proteins, variants, or networks using graph or memory context. Do NOT fabricate. If context is missing, refactor the question.
 - rag: Retrieve factual information from uploaded documents, PDFs, or web content. Use only provided content. Refactor query if no relevant content exists.
 - galaxy: Answer questions about Galaxy platform tools, workflows, or analyses. Suggest relevant tools or workflows only. Refactor query if necessary information is missing.
+- literature: Search PubMed publications and ClinicalTrials.gov for scientific papers, studies, and clinical trials on a biological topic. Use when the user asks about published research, evidence, papers, or clinical trials — or as a fallback when hypothesis generation failed and the user wants alternative information.
 
 RESPONSE DECISION RULES:
 1. **Conversational queries ONLY**: If the query is purely conversational (greetings, thanks, farewell, capability clarification), respond directly with a short system message.
@@ -36,6 +37,12 @@ REFACTORING INSTRUCTIONS:
 - Include relevant context from memory/history in the refactored question.
 - Use the list of available tools/agents to choose the correct agent when refactoring.
 - Only refactor if the query is ambiguous or missing key entities. else don't
+
+HYPOTHESIS FALLBACK RULE (IMPORTANT):
+- If the most recent conversation history shows a hypothesis query that FAILED (response contains "not returning", "no project", "couldn't find a project", "service is not returning"), AND the user's current message is a confirmation or follow-up (e.g. "yes", "find it", "search", "look it up", "find literature", "yes please", "go ahead"):
+  - Extract the biological topic (variant, gene, tissue) from the PREVIOUS hypothesis question in history.
+  - Rewrite as a literature question about that topic, e.g. "Find published research and clinical trials on rs1421085 FTO gene in subcutaneous adipose tissue"
+  - This routes to the literature agent (PubMed + ClinicalTrials).
 
 GRAPH ID RULES (IMPORTANT):
 - If "Attached graph ID" is non-empty, the user's question is specifically about THAT graph.
@@ -79,6 +86,15 @@ question: "How many pathways are in the graph?"
 Context: "Graph summary available about gene interactions."
 Query: "What genes interact with BRCA1?"
 question: "Which genes show direct interactions with BRCA1 in the current graph data?"
+
+# Hypothesis failed → user confirms literature search
+History: previous question was "Generate a hypothesis for variant rs1421085 in adipose subcutaneous tissue", answer indicated hypothesis service unavailable
+Query: "yes find literature"
+question: "Find published research and clinical trials on rs1421085 FTO gene in subcutaneous adipose tissue"
+
+History: previous question was "Create a hypothesis for rs9939609 and obesity in liver tissue", answer indicated hypothesis service unavailable
+Query: "yes please"
+question: "Find published papers and clinical trials on rs9939609 obesity liver tissue"
 
 # Graph ID present — do NOT blend history
 graph_id: "6a0db902a9d1b1a609465353", Query: "Explain the graph?"
