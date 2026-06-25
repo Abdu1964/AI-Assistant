@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 import traceback
 from app.Galaxy_integration.galaxy_content_clean import HTMLProcessor
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -182,53 +183,118 @@ Please provide a clear, professional, and concise answer to the user's query bas
         try:
             query_escaped = query.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
 
-            # Build provider-specific model setup to inject into the subprocess script
             if advanced_llm_provider == "gemini":
-                model_setup = (
-                    "from langchain_google_genai import ChatGoogleGenerativeAI\n"
-                    "model = ChatGoogleGenerativeAI(model='gemini-2.5-flash')"
-                )
-            elif advanced_llm_provider == "local_model":
-                local_model_host = os.getenv("LOCAL_MODEL_HOST", "http://localhost:8002")
-                local_model_name = os.getenv("LOCAL_MODEL", "gemma4")
-                local_model_api_key = os.getenv("LOCAL_MODEL_API_KEY", "")
-                model_setup = (
-                    f"from langchain_openai import ChatOpenAI\n"
-                    f"model = ChatOpenAI(model='{local_model_name}', base_url='{local_model_host}/v1', api_key='{local_model_api_key}', temperature=0)"
-                )
-            else:
-                return {"text": f"Unsupported provider for subprocess path: {advanced_llm_provider}"}
-
-            script_content = f'''
-import asyncio
-import json
+                google_api_key = os.getenv("GOOGLE_API_KEY", "")
+                script_content = f'''
+import asyncio, json
+import google.generativeai as genai
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-{model_setup}
 
 async def run_mcp():
-    client = MultiServerMCPClient({{
+    mcp = MultiServerMCPClient({{
         "galaxyTools": {{
             "transport": "streamable_http",
             "url": "{GALAXY_MCP_SERVER}",
             "headers": {{"Authorization": "Bearer {token}"}}
         }}
     }})
-    tools = await client.get_tools()
-    agent = create_react_agent(model, tools)
-    response = await agent.ainvoke({{"messages": "{query_escaped}"}})
+    lc_tools = await mcp.get_tools()
 
-    messages = response.get("messages", [])
-    output = ""
-    for msg in reversed(messages):
-        content = getattr(msg, "content", None) or msg.get("content", "")
-        if content and isinstance(content, str):
-            output = content
+    fn_decls = []
+    for t in lc_tools:
+        try:
+            schema = t.args_schema.model_json_schema()
+        except Exception:
+            try:
+                schema = t.args_schema.schema()
+            except Exception:
+                schema = {{"type": "object", "properties": {{}}}}
+        fn_decls.append({{"name": t.name, "description": t.description or "", "parameters": schema}})
+
+    genai.configure(api_key="{google_api_key}")
+    model = genai.GenerativeModel("gemini-2.5-flash", tools=[{{"function_declarations": fn_decls}}])
+    chat = model.start_chat()
+    response = chat.send_message("{query_escaped}")
+
+    for _ in range(10):
+        fc_parts = []
+        for cand in response.candidates:
+            for part in cand.content.parts:
+                if hasattr(part, "function_call") and part.function_call.name:
+                    fc_parts.append(part)
+        if not fc_parts:
+            print(json.dumps({{"text": response.text}}))
             break
-    print(json.dumps({{"text": output or str(response)}}))
+        tool_responses = []
+        for part in fc_parts:
+            fc = part.function_call
+            tool = next((t for t in lc_tools if t.name == fc.name), None)
+            if tool:
+                result = await tool.ainvoke(dict(fc.args))
+                tool_responses.append({{
+                    "function_response": {{"name": fc.name, "response": {{"result": str(result)}}}}
+                }})
+        response = chat.send_message(tool_responses)
 
 asyncio.run(run_mcp())
 '''
+
+            elif advanced_llm_provider == "local_model":
+                local_model_host = os.getenv("LOCAL_MODEL_HOST", "http://localhost:8002")
+                local_model_name = os.getenv("LOCAL_MODEL", "gemma4")
+                local_model_api_key = os.getenv("LOCAL_MODEL_API_KEY", "sk-na")
+                script_content = f'''
+import asyncio, json
+import openai
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+async def run_mcp():
+    mcp = MultiServerMCPClient({{
+        "galaxyTools": {{
+            "transport": "streamable_http",
+            "url": "{GALAXY_MCP_SERVER}",
+            "headers": {{"Authorization": "Bearer {token}"}}
+        }}
+    }})
+    lc_tools = await mcp.get_tools()
+
+    openai_tools = []
+    for t in lc_tools:
+        try:
+            schema = t.args_schema.model_json_schema()
+        except Exception:
+            try:
+                schema = t.args_schema.schema()
+            except Exception:
+                schema = {{"type": "object", "properties": {{}}}}
+        openai_tools.append({{"type": "function", "function": {{"name": t.name, "description": t.description or "", "parameters": schema}}}})
+
+    client = openai.OpenAI(base_url="{local_model_host}/v1", api_key="{local_model_api_key}")
+    messages = [{{"role": "user", "content": "{query_escaped}"}}]
+
+    for _ in range(10):
+        resp = client.chat.completions.create(
+            model="{local_model_name}",
+            messages=messages,
+            tools=openai_tools if openai_tools else None
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
+            messages.append(choice.message)
+            for tc in choice.message.tool_calls:
+                tool = next((t for t in lc_tools if t.name == tc.function.name), None)
+                if tool:
+                    result = await tool.ainvoke(json.loads(tc.function.arguments))
+                    messages.append({{"role": "tool", "tool_call_id": tc.id, "content": str(result)}})
+        else:
+            print(json.dumps({{"text": choice.message.content or ""}}))
+            break
+
+asyncio.run(run_mcp())
+'''
+
+            else:
+                return {"text": f"Unsupported provider for subprocess path: {advanced_llm_provider}"}
 
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
                 f.write(script_content)
@@ -237,7 +303,7 @@ asyncio.run(run_mcp())
             try:
                 logger.info(f"Running MCP in subprocess: {script_path}")
                 result = subprocess.run(
-                    ['python', script_path],
+                    [sys.executable, script_path],
                     capture_output=True,
                     text=True,
                     timeout=120

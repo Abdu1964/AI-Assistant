@@ -5,6 +5,7 @@ from .llm_handle.llm_models import (
     openai_embedding_model,
 )
 from .prompts.classifier_prompt import (
+    hypothesis_aggregator_prompt,
     classifier_prompt,
     main_classifier_prompt,
     aggregator_prompt
@@ -215,8 +216,12 @@ class AiAssistance:
 
     def _build_agent_list(self, query_types: list, content_ids, urls, graph_id) -> list:
         agents_to_run = []
+
+        # content_retrieval_agent always runs first when a graph_id is present,
+        # so subsequent agents have the graph context available in state.
         if content_ids or urls or graph_id:
             agents_to_run.append("content_retrieval_agent")
+
         type_to_agent = {
             "annotation_biological": "annotation_agent",
             "hypothesis_generation": "hypothesis_agent",
@@ -227,14 +232,11 @@ class AiAssistance:
         }
         for qtype in query_types:
             if qtype == "literature":
-                # Literature queries: RAG + PubMed + ClinicalTrials together
                 for agent in ("rag_agent", "pubmed_agent", "clinical_trials_agent"):
                     if agent not in agents_to_run:
                         agents_to_run.append(agent)
                 continue
             agent = type_to_agent.get(qtype)
-            if agent == "annotation_agent" and graph_id:
-                continue
             if agent and agent not in agents_to_run:
                 agents_to_run.append(agent)
 
@@ -256,7 +258,7 @@ class AiAssistance:
         # - no graph_id: generate a new hypothesis via hypothesis_agent
         if resource == "hypothesis":
             if graph_id:
-                logger.info("Resource='hypothesis' + graph_id — routing to content_retrieval_agent")
+                logger.info("Resource='hypothesis' + graph_id — routing only to content_retrieval_agent")
                 return {
                     "query_types": ["hypothesis_generation"],
                     "agents_to_run": ["content_retrieval_agent"],
@@ -1036,12 +1038,25 @@ class AiAssistance:
 
             combined_text = "\n\n".join(sources_info)
 
-            # Include json_format note if present
             json_note = ""
             if json_format:
-                json_note = "\n\nNote: Structured annotation data is also available for this query."
+                nodes = json_format.get("nodes", [])
+                predicates = json_format.get("predicates", [])
+                if nodes or predicates:
+                    node_ids = [n.get("id", "") for n in nodes if n.get("id")]
+                    json_note = (
+                        f"\n\nNote: An annotation query was successfully built for "
+                        f"{', '.join(node_ids) if node_ids else 'the requested entities'} "
+                        f"and will be displayed on the graph."
+                    )
+                else:
+                    json_note = "\n\nNote: Structured annotation data is also available for this query."
 
-            prompt = aggregator_prompt.format(user_query=user_query, combined_text=combined_text, json_note=json_note)
+            query_types = state.get("query_types", [])
+            if "hypothesis_generation" in query_types and state.get("graph_id"):
+                prompt = hypothesis_aggregator_prompt.format(user_query=user_query, combined_text=combined_text)
+            else:
+                prompt = aggregator_prompt.format(user_query=user_query, combined_text=combined_text, json_note=json_note)
 
             aggregated_text = self.advanced_llm.generate(prompt)
             logger.info(f"Successfully aggregated response: {aggregated_text[:100]}...")
