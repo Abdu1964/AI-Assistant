@@ -10,7 +10,6 @@ import time
 logger = logging.getLogger(__name__)
 
 # Load API endpoints from environment variables
-HYPOTHESIS_CHAT_ENDPOINT = os.getenv('HYPOTHESIS_CHAT_ENDPOINT')
 HYPOTHESIS_MAIN_ENDPOINT = os.getenv('HYPOTHESIS_MAIN_ENDPOINT')
 HYPOTHESIS_DATA_API = os.getenv('HYPOTHESIS_DATA_API')
 
@@ -154,52 +153,69 @@ class HypothesisGeneration:
         Retrieve hypothesis information by ID.
         """
         logger.info(f"Retrieving hypothesis by ID: {hypothesis_id}")
-        emit_to_user(user=user_id,message=f"Retrieving hypothesis by ID: {hypothesis_id}")
-        
-        try:   
-            if query: 
-                emit_to_user(user=user_id,message=f"Processing query with existing hypothesis...")
-                data = {
-                    "query": query,
-                    "hypothesis_id": hypothesis_id}
-                headers = {
-                    "Authorization": f"Bearer {token}"
-                }
-                # Use json=data
-                response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                emit_to_user(user=user_id,message="Successfully processed query with hypothesis")
-                return data
-            else:
-                # ── Redis cache disabled for development/testing ─────────────────────
-                # Uncomment to re-enable caching in production:
-                # cached_graph = redis_manager.get_graph_by_id(hypothesis_id)
-                # if cached_graph and cached_graph.get("graph_summary"):
-                #     logger.info(f"Cache hit for graph_id={hypothesis_id} {cached_graph}")
-                #     return {"text": cached_graph["graph_summary"]}
-                # ─────────────────────────────────────────────────────────────────────
+        logger.info(f"Token: {token}")
+        emit_to_user(user=user_id, message=f"Retrieving hypothesis by ID: {hypothesis_id}")
 
-                data = {
-                    "hypothesis_id": hypothesis_id
-                }
+        try:
+            headers = {"Authorization": f"Bearer {token}"}
+            response = requests.get(HYPOTHESIS_MAIN_ENDPOINT, params={"id": hypothesis_id}, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Hypothesis GET response status: {data.get('status')}")
 
-                headers = {
-                    "Authorization": f"Bearer {token}"
+            summary = data.get("summary", "")
+            graph = data.get("graph", {})
+            result = data.get("result", {})
+
+            if not summary and not graph:
+                logger.warning(f"Hypothesis {hypothesis_id} returned no data")
+                return {"text": "NO summaries provided"}
+
+            context_parts = []
+
+            if summary:
+                context_parts.append(f"Summary:\n{summary}")
+
+            meta = (
+                f"Variant: {data.get('variant', 'N/A')} | "
+                f"Phenotype: {data.get('phenotype', 'N/A')} | "
+                f"Status: {data.get('status', 'N/A')}"
+            )
+            context_parts.append(f"Hypothesis Metadata:\n{meta}")
+
+            nodes = graph.get("nodes", [])
+            if nodes:
+                node_lines = [f"  - {n.get('name', n.get('id'))} (type: {n.get('type')})" for n in nodes]
+                context_parts.append("Graph Nodes:\n" + "\n".join(node_lines))
+
+            edges = graph.get("edges", [])
+            if edges:
+                edge_lines = [f"  - {e.get('source')} --[{e.get('label')}]--> {e.get('target')}" for e in edges]
+                context_parts.append("Graph Relationships:\n" + "\n".join(edge_lines))
+
+            go_terms = result.get("GO_terms", [])
+            if go_terms:
+                go_lines = [
+                    f"  - {g.get('name')} (p={g.get('p', 'N/A'):.4f}, genes: {', '.join(g.get('genes', []))})"
+                    for g in go_terms[:5]
+                ]
+                context_parts.append("Top GO Terms:\n" + "\n".join(go_lines))
+
+            full_context = "\n\n".join(context_parts)
+            logger.info(f"Built hypothesis context with {len(nodes)} nodes, {len(edges)} edges, {len(go_terms)} GO terms")
+
+            return {
+                "text": full_context,
+                "resource": {
+                    "id": hypothesis_id,
+                    "type": "hypothesis",
+                    "graph": graph,
                 }
-                try:
-                    # Use json=data
-                    response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, json=data, headers=headers)
-                    response.raise_for_status()
-                    data = response.json()
-                    return data
-                except Exception:
-                    logger.error(f"Failed to retrieve hypothesis by ID: {response}")
-                    emit_to_user(user=user_id,message=f"Failed to retrieve hypothesis")
-                    return {"text": "NO summaries provided"}
-        except Exception:
-            emit_to_user(user=user_id,message="Error retrieving hypothesis")
-            return {}
+            }
+        except Exception as e:
+            logger.error(f"Failed to retrieve hypothesis by ID {hypothesis_id}: {e}")
+            emit_to_user(user=user_id, message="Error retrieving hypothesis")
+            return {"text": "NO summaries provided"}
 
     def format_user_query(self, query: str, user_id) -> Dict[str, Any]:
         """
