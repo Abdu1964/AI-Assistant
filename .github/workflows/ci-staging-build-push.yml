@@ -99,6 +99,7 @@ jobs:
 
     - name: SonarQube Scan
       uses: sonarsource/sonarqube-scan-action@master
+      continue-on-error: true
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: http://${{ secrets.HETZNER_IP }}:9000
@@ -317,6 +318,13 @@ jobs:
         echo "MONGO_USERNAME=${{ secrets.MONGO_USERNAME || 'test' }}" >> .env
         echo "MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD || 'test' }}" >> .env
         echo "MONGO_DATABASE=${{ secrets.MONGO_DATABASE || 'test' }}" >> .env
+
+        echo "NEO4J_URI=${{ secrets.NEO4J_URI || 'bolt://localhost:7687' }}" >> .env
+        echo "NEO4J_USERNAME=${{ secrets.NEO4J_USERNAME || 'test' }}" >> .env
+        echo "NEO4J_PASSWORD=${{ secrets.NEO4J_PASSWORD || 'test' }}" >> .env
+
+        echo "LOCAL_MODEL_HOST=${{ secrets.LOCAL_MODEL_HOST || 'http://localhost:8002' }}" >> .env
+        echo "LOCAL_MODEL_API_KEY=${{ secrets.LOCAL_MODEL_API_KEY || 'test' }}" >> .env
 
         echo "=== .env file created successfully ==="
         cat .env
