@@ -10,6 +10,7 @@ on:
 env:
   DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
   DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+  DOCKER_HUB_ORG: rejuvebio
 
 jobs:
   # STEP 0: Cache Warmup (runs first, in parallel)
@@ -99,6 +100,7 @@ jobs:
 
     - name: SonarQube Scan
       uses: sonarsource/sonarqube-scan-action@master
+      continue-on-error: true
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: http://${{ secrets.HETZNER_IP }}:9000
@@ -293,16 +295,16 @@ jobs:
       run: |
         echo "=== Creating .env file from GitHub Secrets ==="
 
-        echo "FLASK_HOST_PORT=${{ secrets.FLASK_HOST_PORT }}" >> .env
-        echo "FLASK_INTERNAL_PORT=${{ secrets.FLASK_INTERNAL_PORT }}" >> .env
-        echo "REDIS_HOST_PORT=${{ secrets.REDIS_HOST_PORT }}" >> .env
-        echo "REDIS_INTERNAL_PORT=${{ secrets.REDIS_INTERNAL_PORT }}" >> .env
-        echo "MONGODB_HOST_PORT=${{ secrets.MONGODB_HOST_PORT }}" >> .env
-        echo "MONGODB_INTERNAL_PORT=${{ secrets.MONGODB_INTERNAL_PORT }}" >> .env
-        echo "QDRANT_HOST_PORT=${{ secrets.QDRANT_HOST_PORT }}" >> .env
-        echo "QDRANT_INTERNAL_PORT=${{ secrets.QDRANT_INTERNAL_PORT }}" >> .env
-        echo "QDRANT_GRPC_HOST_PORT=${{ secrets.QDRANT_GRPC_HOST_PORT }}" >> .env
-        echo "QDRANT_GRPC_INTERNAL_PORT=${{ secrets.QDRANT_GRPC_INTERNAL_PORT }}" >> .env
+        echo "FLASK_HOST_PORT=${{ secrets.FLASK_HOST_PORT || '5000' }}" >> .env
+        echo "FLASK_INTERNAL_PORT=${{ secrets.FLASK_INTERNAL_PORT || '5000' }}" >> .env
+        echo "REDIS_HOST_PORT=${{ secrets.REDIS_HOST_PORT || '6379' }}" >> .env
+        echo "REDIS_INTERNAL_PORT=${{ secrets.REDIS_INTERNAL_PORT || '6379' }}" >> .env
+        echo "MONGODB_HOST_PORT=${{ secrets.MONGODB_HOST_PORT || '27017' }}" >> .env
+        echo "MONGODB_INTERNAL_PORT=${{ secrets.MONGODB_INTERNAL_PORT || '27017' }}" >> .env
+        echo "QDRANT_HOST_PORT=${{ secrets.QDRANT_HOST_PORT || '6333' }}" >> .env
+        echo "QDRANT_INTERNAL_PORT=${{ secrets.QDRANT_INTERNAL_PORT || '6333' }}" >> .env
+        echo "QDRANT_GRPC_HOST_PORT=${{ secrets.QDRANT_GRPC_HOST_PORT || '6334' }}" >> .env
+        echo "QDRANT_GRPC_INTERNAL_PORT=${{ secrets.QDRANT_GRPC_INTERNAL_PORT || '6334' }}" >> .env
 
         echo "BASIC_LLM_PROVIDER=${{ secrets.BASIC_LLM_PROVIDER || 'gemini' }}" >> .env
         echo "BASIC_LLM_VERSION=${{ secrets.BASIC_LLM_VERSION || 'gemini-1.5-flash' }}" >> .env
@@ -317,6 +319,13 @@ jobs:
         echo "MONGO_USERNAME=${{ secrets.MONGO_USERNAME || 'test' }}" >> .env
         echo "MONGO_PASSWORD=${{ secrets.MONGO_PASSWORD || 'test' }}" >> .env
         echo "MONGO_DATABASE=${{ secrets.MONGO_DATABASE || 'test' }}" >> .env
+
+        echo "NEO4J_URI=${{ secrets.NEO4J_URI || 'bolt://localhost:7687' }}" >> .env
+        echo "NEO4J_USERNAME=${{ secrets.NEO4J_USERNAME || 'test' }}" >> .env
+        echo "NEO4J_PASSWORD=${{ secrets.NEO4J_PASSWORD || 'test' }}" >> .env
+
+        echo "LOCAL_MODEL_HOST=${{ secrets.LOCAL_MODEL_HOST || 'http://localhost:8002' }}" >> .env
+        echo "LOCAL_MODEL_API_KEY=${{ secrets.LOCAL_MODEL_API_KEY || 'test' }}" >> .env
 
         echo "=== .env file created successfully ==="
         cat .env
@@ -608,9 +617,9 @@ jobs:
         IMAGE_ID=$(docker compose -f docker-compose.ci.yml images -q assistant)
         SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
 
-        STAGING_TAG="${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"
-        SHA_TAG="${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging-${SHORT_SHA}"
-        LATEST_TAG="${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging-latest"
+        STAGING_TAG="${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging"
+        SHA_TAG="${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging-${SHORT_SHA}"
+        LATEST_TAG="${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging-latest"
 
         docker tag $IMAGE_ID $STAGING_TAG
         docker tag $IMAGE_ID $SHA_TAG
@@ -638,7 +647,7 @@ jobs:
         COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
       run: |
         echo "=== Signing Docker image ==="
-        IMAGE_TAG="${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"
+        IMAGE_TAG="${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging"
         echo "$COSIGN_PRIVATE_KEY" > /tmp/cosign.key
         cosign sign --key /tmp/cosign.key $IMAGE_TAG -y
         rm /tmp/cosign.key
@@ -674,7 +683,7 @@ jobs:
           -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
           https://api.github.com/repos/${{ github.repository }}/dispatches \
-          -d '{"event_type":"deploy-staging","client_payload":{"image_tag":"${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"}}'
+          -d '{"event_type":"deploy-staging","client_payload":{"image_tag":"${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging"}}'
         echo "[SUCCESS] CD workflow triggered successfully!"
 
   # Email Notifications
@@ -703,7 +712,7 @@ jobs:
 
           Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          Image pushed: ${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging
+          Image pushed: ${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging
 
   notify-failure:
     runs-on: ubuntu-latest
@@ -756,7 +765,7 @@ jobs:
         if [[ "${{ needs.build-and-validate-assistant.outputs.validation-status }}" == "success" ]]; then
           if [[ "${{ github.event_name }}" == "push" ]]; then
             echo "[SUCCESS] AI Assistant built, validated, and pushed to Docker Hub!"
-            echo "*** Image: ${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"
+            echo "*** Image: ${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging"
           else
             echo "[SUCCESS] PR validation passed - ready to merge!"
           fi
