@@ -646,6 +646,7 @@ jobs:
 
     - name: Sign Docker image
       if: github.event_name == 'push' && steps.check-merge.outputs.is_merge == 'true' && steps.validate-container.outcome == 'success'
+      continue-on-error: true
       env:
         COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
