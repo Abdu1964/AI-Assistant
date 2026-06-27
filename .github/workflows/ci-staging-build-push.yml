@@ -10,6 +10,7 @@ on:
 env:
   DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
   DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+  DOCKER_HUB_ORG: rejuvebio
 
 jobs:
   # STEP 0: Cache Warmup (runs first, in parallel)
@@ -616,9 +617,9 @@ jobs:
         IMAGE_ID=$(docker compose -f docker-compose.ci.yml images -q assistant)
         SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
 
-        STAGING_TAG="${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"
-        SHA_TAG="${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging-${SHORT_SHA}"
-        LATEST_TAG="${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging-latest"
+        STAGING_TAG="${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging"
+        SHA_TAG="${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging-${SHORT_SHA}"
+        LATEST_TAG="${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging-latest"
 
         docker tag $IMAGE_ID $STAGING_TAG
         docker tag $IMAGE_ID $SHA_TAG
@@ -646,7 +647,7 @@ jobs:
         COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
       run: |
         echo "=== Signing Docker image ==="
-        IMAGE_TAG="${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"
+        IMAGE_TAG="${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging"
         echo "$COSIGN_PRIVATE_KEY" > /tmp/cosign.key
         cosign sign --key /tmp/cosign.key $IMAGE_TAG -y
         rm /tmp/cosign.key
@@ -682,7 +683,7 @@ jobs:
           -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
           https://api.github.com/repos/${{ github.repository }}/dispatches \
-          -d '{"event_type":"deploy-staging","client_payload":{"image_tag":"${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"}}'
+          -d '{"event_type":"deploy-staging","client_payload":{"image_tag":"${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging"}}'
         echo "[SUCCESS] CD workflow triggered successfully!"
 
   # Email Notifications
@@ -711,7 +712,7 @@ jobs:
 
           Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          Image pushed: ${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging
+          Image pushed: ${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging
 
   notify-failure:
     runs-on: ubuntu-latest
@@ -764,7 +765,7 @@ jobs:
         if [[ "${{ needs.build-and-validate-assistant.outputs.validation-status }}" == "success" ]]; then
           if [[ "${{ github.event_name }}" == "push" ]]; then
             echo "[SUCCESS] AI Assistant built, validated, and pushed to Docker Hub!"
-            echo "*** Image: ${{ secrets.DOCKER_HUB_USERNAME }}/ai-assistant:staging"
+            echo "*** Image: ${{ env.DOCKER_HUB_ORG }}/ai-assistant:staging"
           else
             echo "[SUCCESS] PR validation passed - ready to merge!"
           fi
