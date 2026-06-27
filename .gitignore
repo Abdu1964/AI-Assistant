@@ -1,5 +1,4 @@
 __pycache__/
-.env
 conversation_cache.json
 qdrant_storage
 biocypher-log
@@ -12,3 +11,8 @@ test.py
 rag_user_pdf.json
 *.lock
 pdfs_uploaded
+*.env
+.infisical.json
+/tmp
+/storage
+

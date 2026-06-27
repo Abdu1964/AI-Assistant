@@ -1,9 +1,9 @@
 import asyncio
 import logging
+import sys
 import traceback
 from app.Galaxy_integration.galaxy_content_clean import HTMLProcessor
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_google_genai import ChatGoogleGenerativeAI
 import os
 import subprocess
 import json
@@ -11,6 +11,7 @@ import tempfile
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GALAXY_MCP_SERVER = os.getenv("GALAXY_MCP_SERVER")
+advanced_llm_provider = os.getenv("ADVANCED_LLM_PROVIDER", "gemini")  # gemini | openai | local_model
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -22,228 +23,305 @@ class GalaxyHandler:
         self.qdrant_client = qdrant_client
         self.embedding_model = embedding_model
         self.collection_name = "1_AI_ASSISTANT_GALAXY_DATASETS"
-        logger.info("GalaxyHandler initialized")
+        logger.info(f"GalaxyHandler initialized with provider='{advanced_llm_provider}'")
 
     def get_galaxy_info(self, query, user_id, token, urls=None):
         """Main entry point: returns text only for Flask"""
         logger.info(f"get_galaxy_info called with query='{query}', user_id='{user_id}', urls={urls}")
         try:
             if urls and query:
-                return self._handle_files(query=query, user_id=user_id, urls=urls)
+                return self._handle_files(query=query, urls=urls)
             else:
                 logger.info("No urls provided, routing to MCP handler")
-                return self._handle_mcp_sync(query, token)
+                return self._handle_mcp(query, token)
         except Exception as e:
             logger.error(f"Galaxy handler failed: {e}")
             traceback.print_exc()
             return {"text": f"Error processing Galaxy request: {e}"}
 
-    def _handle_files(self, query, user_id, urls):
+    def _collection_exists(self):
+        try:
+            collection_info = self.qdrant_client.client.get_collection(self.collection_name)
+            logger.info(f"Collection '{self.collection_name}' exists with {collection_info.points_count} points")
+            return True
+        except Exception:
+            logger.info(f"Collection '{self.collection_name}' does not exist yet")
+            return False
+
+    def _check_url_stored(self, query, url):
+        try:
+            stored = self.qdrant_client.retrieve_similar_content(
+                collection_name=self.collection_name,
+                query=query,
+                content_ids=[url],
+                filter=True
+            )
+            logger.info(f"Stored chunks for {url}: {len(stored) if stored else 0}")
+            return bool(stored)
+        except Exception as e:
+            logger.warning(f"Error checking URL {url}: {e}")
+            return False
+
+    def _find_urls_to_process(self, query, urls):
+        if not self._collection_exists():
+            logger.info("Collection doesn't exist, will process all URLs")
+            return urls.copy()
+        urls_to_process = []
+        for url in urls:
+            logger.info(f"Checking if URL exists: {url}")
+            if self._check_url_stored(query, url):
+                logger.info(f"URL already in collection: {url}")
+            else:
+                logger.info(f"URL not found in collection, will process: {url}")
+                urls_to_process.append(url)
+        return urls_to_process
+
+    def _store_new_urls(self, processor, urls_to_process):
+        if not urls_to_process:
+            logger.info("All URLs already exist in collection")
+            return None
+        logger.info(f"Processing {len(urls_to_process)} new URLs")
+        storage_results = processor.store_embedded(
+            urls=urls_to_process,
+            collection_name=self.collection_name
+        )
+        for url, result in storage_results.items():
+            logger.info(f"Storage result for {url}: {result}")
+        successful_urls = [url for url, result in storage_results.items()
+                           if "Successfully processed" in result]
+        if not successful_urls:
+            logger.error("Failed to process any URLs")
+            failed_reasons = [f"{url}: {result}" for url, result in storage_results.items()]
+            return {"text": "Failed to extract content from provided documents:\n" + "\n".join(failed_reasons)}
+        return None
+
+    def _retrieve_similar_content(self, query, urls):
+        logger.info(f"Retrieving similar content for query: '{query}' from {len(urls)} URLs")
+        try:
+            results = self.qdrant_client.retrieve_similar_content(
+                collection_name=self.collection_name,
+                query=query,
+                content_ids=urls,
+                top_k=10
+            )
+            return results, None
+        except Exception as e:
+            logger.error(f"Error retrieving similar content: {e}")
+            return None, {"text": f"Error retrieving content: {e}"}
+
+    def _build_response(self, query, urls, similar_results):
+        if not similar_results:
+            logger.warning("No relevant chunks found in collection")
+            return f"I could not find any relevant information in the provided {len(urls)} document(s) to answer your query."
+        logger.info(f"Found {len(similar_results)} relevant chunks")
+        results_by_url = {}
+        for chunk in similar_results:
+            url = chunk.get("content_id", "Unknown")
+            if url not in results_by_url:
+                results_by_url[url] = []
+            results_by_url[url].append(chunk)
+        context_parts = []
+        for url, chunks in results_by_url.items():
+            url_context = f"\n--- From {url} ---\n"
+            url_context += "\n\n".join(str(chunk.get("text", "")) for chunk in chunks)
+            context_parts.append(url_context)
+        context_text = "\n\n".join(context_parts)
+        llm_prompt = f"""
+You are an expert AI assistant. You are given the following context extracted from {len(urls)} document(s):
+
+{context_text}
+
+User's query: "{query}"
+
+Please provide a clear, professional, and concise answer to the user's query based solely on the context above.
+- If information comes from multiple documents, you may synthesize it
+- If the answer is not directly available, politely inform the user
+- Do not hallucinate information
+- Keep the response clear and concise
+- If relevant, you can mention which document(s) the information comes from
+"""
+        return self.llm.generate(llm_prompt)
+
+    def _handle_files(self, query, urls):
         """Handle file-based queries using RAG - supports multiple URLs"""
         logger.info(f"_handle_files called with urls={urls}")
-        
-        # Normalize to list
         if isinstance(urls, str):
             urls = [urls]
-        
         if not urls:
             return {"text": "No urls provided for analysis."}
-
         try:
             processor = HTMLProcessor(self.qdrant_client, self.llm)
-            
-            # Check if collection exists first
-            collection_exists = False
-            try:
-                # Try to get collection info
-                collection_info = self.qdrant_client.client.get_collection(self.collection_name)
-                collection_exists = True
-                logger.info(f"Collection '{self.collection_name}' exists with {collection_info.points_count} points")
-            except Exception as e:
-                logger.info(f"Collection '{self.collection_name}' does not exist yet")
-                collection_exists = False
-            
-            # Check which URLs need to be stored
-            urls_to_process = []
-            
-            if collection_exists:
-                # Collection exists, check each URL
-                for url in urls:
-                    logger.info(f"Checking if URL exists: {url}")
-                    try:
-                        stored = self.qdrant_client.retrieve_similar_content(
-                            collection_name=self.collection_name,
-                            query=query,
-                            content_ids=[url],
-                            filter=True
-                        )
-                        logger.info(f"Stored chunks for {url}: {len(stored) if stored else 0}")
-                        
-                        if not stored:
-                            logger.info(f"URL not found in collection, will process: {url}")
-                            urls_to_process.append(url)
-                        else:
-                            logger.info(f"URL already in collection: {url}")
-                    except Exception as e:
-                        logger.warning(f"Error checking URL {url}: {e}")
-                        urls_to_process.append(url)
-            else:
-                # Collection doesn't exist, process all URLs
-                logger.info("Collection doesn't exist, will process all URLs")
-                urls_to_process = urls.copy()
-            
-            # Process all new URLs in batch
-            if urls_to_process:
-                logger.info(f"Processing {len(urls_to_process)} new URLs")
-                storage_results = processor.store_embedded(
-                    urls=urls_to_process, 
-                    collection_name=self.collection_name
-                )
-                
-                # Log results for each URL
-                for url, result in storage_results.items():
-                    logger.info(f"Storage result for {url}: {result}")
-                    
-                # Check if any URLs were successfully processed
-                successful_urls = [url for url, result in storage_results.items() 
-                                if "Successfully processed" in result]
-                
-                if not successful_urls:
-                    logger.error("Failed to process any URLs")
-                    failed_reasons = [f"{url}: {result}" for url, result in storage_results.items()]
-                    return {"text": f"Failed to extract content from provided documents:\n" + "\n".join(failed_reasons)}
-            else:
-                logger.info("All URLs already exist in collection")
-
-            logger.info(f"Retrieving similar content for query: '{query}' from {len(urls)} URLs")
-            
-            try:
-                similar_results = self.qdrant_client.retrieve_similar_content(
-                    collection_name=self.collection_name,
-                    query=query,
-                    content_ids=urls,  
-                    top_k=10  
-                )
-            except Exception as e:
-                logger.error(f"Error retrieving similar content: {e}")
-                return {"text": f"Error retrieving content: {e}"}
-
-            if similar_results:
-                logger.info(f"Found {len(similar_results)} relevant chunks")
-                
-                # Group results by URL for better context
-                results_by_url = {}
-                for chunk in similar_results:
-                    url = chunk.get("content_id", "Unknown")
-                    if url not in results_by_url:
-                        results_by_url[url] = []
-                    results_by_url[url].append(chunk)
-                
-                context_parts = []
-                for url, chunks in results_by_url.items():
-                    url_context = f"\n--- From {url} ---\n"
-                    url_context += "\n\n".join(
-                        str(chunk.get("text", ""))  # convert dict or any type to string
-                        for chunk in chunks
-                    )
-                    context_parts.append(url_context)
-
-                context_text = "\n\n".join(context_parts)
-                
-                llm_prompt = f"""
-                            You are an expert AI assistant. You are given the following context extracted from {len(urls)} document(s):
-
-                            {context_text}
-
-                            User's query: "{query}"
-
-                            Please provide a clear, professional, and concise answer to the user's query based solely on the context above.
-                            - If information comes from multiple documents, you may synthesize it
-                            - If the answer is not directly available, politely inform the user
-                            - Do not hallucinate information
-                            - Keep the response clear and concise
-                            - If relevant, you can mention which document(s) the information comes from
-                            """
-                response_text = self.llm.generate(llm_prompt)
-            else:
-                logger.warning("No relevant chunks found in collection")
-                response_text = f"I could not find any relevant information in the provided {len(urls)} document(s) to answer your query."
-
-            return {"text": response_text}
-
+            urls_to_process = self._find_urls_to_process(query, urls)
+            error = self._store_new_urls(processor, urls_to_process)
+            if error:
+                return error
+            similar_results, error = self._retrieve_similar_content(query, urls)
+            if error:
+                return error
+            return {"text": self._build_response(query, urls, similar_results)}
         except Exception as e:
             logger.error(f"Galaxy file analyzer failed: {e}")
-            import traceback
             traceback.print_exc()
             return {"text": f"Error analyzing urls: {e}"}
-            
-    def _handle_mcp_sync(self, query, token):
-        """Sync wrapper - runs MCP in subprocess to avoid eventlet conflicts"""
-        logger.info(f"_handle_mcp_sync called with query='{query}'")
+
+    # ── FIX: renamed from `handle_mcp` → `_handle_mcp` (missing underscore caused AttributeError) ──
+    def _handle_mcp(self, query, token):
+        if advanced_llm_provider == "openai":
+            logger.info("Using async MCP path (OpenAI)")
+            return self._handle_mcp_async(query, token)
+        elif advanced_llm_provider in ("gemini", "local_model"):
+            logger.info(f"Using subprocess MCP path ({advanced_llm_provider} — avoids async conflicts)")
+            return self._handle_mcp_subprocess(query, token)
+        else:
+            logger.warning(f"Unknown provider '{advanced_llm_provider}', falling back to RAG")
+            return self._rag_fallback(query)
+
+    def _handle_mcp_subprocess(self, query, token):
+        """Runs MCP agent in a subprocess — works for both Gemini and local model."""
+        logger.info(f"_handle_mcp_subprocess called | provider='{advanced_llm_provider}' | query='{query}'")
 
         try:
-            # Escape the query properly for the script
             query_escaped = query.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
 
-            # Create a temporary Python script that runs WITHOUT eventlet
-            script_content = f'''
-import asyncio
-import json
+            if advanced_llm_provider == "gemini":
+                google_api_key = os.getenv("GOOGLE_API_KEY", "")
+                script_content = f'''
+import asyncio, json
+import google.generativeai as genai
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import create_agent
 
 async def run_mcp():
-    model = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001")
-    client = MultiServerMCPClient({{
+    mcp = MultiServerMCPClient({{
         "galaxyTools": {{
             "transport": "streamable_http",
             "url": "{GALAXY_MCP_SERVER}",
             "headers": {{"Authorization": "Bearer {token}"}}
         }}
     }})
-    query = "{query_escaped}"
-    tools = await client.get_tools()
-    agent = create_agent(model, tools)
-    response = await agent.ainvoke({{"messages": query}})
-    if isinstance(response, dict):
-        output = response.get("output", str(response))
-    else:
-        output = str(response)
-    return {{"text": output}}
+    lc_tools = await mcp.get_tools()
 
-if __name__ == "__main__":
-    result = asyncio.run(run_mcp())
-    print(json.dumps(result))
+    fn_decls = []
+    for t in lc_tools:
+        try:
+            schema = t.args_schema.model_json_schema()
+        except Exception:
+            try:
+                schema = t.args_schema.schema()
+            except Exception:
+                schema = {{"type": "object", "properties": {{}}}}
+        fn_decls.append({{"name": t.name, "description": t.description or "", "parameters": schema}})
+
+    genai.configure(api_key="{google_api_key}")
+    model = genai.GenerativeModel("gemini-2.5-flash", tools=[{{"function_declarations": fn_decls}}])
+    chat = model.start_chat()
+    response = chat.send_message("{query_escaped}")
+
+    for _ in range(10):
+        fc_parts = []
+        for cand in response.candidates:
+            for part in cand.content.parts:
+                if hasattr(part, "function_call") and part.function_call.name:
+                    fc_parts.append(part)
+        if not fc_parts:
+            print(json.dumps({{"text": response.text}}))
+            break
+        tool_responses = []
+        for part in fc_parts:
+            fc = part.function_call
+            tool = next((t for t in lc_tools if t.name == fc.name), None)
+            if tool:
+                result = await tool.ainvoke(dict(fc.args))
+                tool_responses.append({{
+                    "function_response": {{"name": fc.name, "response": {{"result": str(result)}}}}
+                }})
+        response = chat.send_message(tool_responses)
+
+asyncio.run(run_mcp())
 '''
 
-            # Write script to temp file
+            elif advanced_llm_provider == "local_model":
+                local_model_host = os.getenv("LOCAL_MODEL_HOST", "http://localhost:8002")
+                local_model_name = os.getenv("LOCAL_MODEL", "gemma4")
+                local_model_api_key = os.getenv("LOCAL_MODEL_API_KEY", "sk-na")
+                script_content = f'''
+import asyncio, json
+import openai
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+async def run_mcp():
+    mcp = MultiServerMCPClient({{
+        "galaxyTools": {{
+            "transport": "streamable_http",
+            "url": "{GALAXY_MCP_SERVER}",
+            "headers": {{"Authorization": "Bearer {token}"}}
+        }}
+    }})
+    lc_tools = await mcp.get_tools()
+
+    openai_tools = []
+    for t in lc_tools:
+        try:
+            schema = t.args_schema.model_json_schema()
+        except Exception:
+            try:
+                schema = t.args_schema.schema()
+            except Exception:
+                schema = {{"type": "object", "properties": {{}}}}
+        openai_tools.append({{"type": "function", "function": {{"name": t.name, "description": t.description or "", "parameters": schema}}}})
+
+    client = openai.OpenAI(base_url="{local_model_host}/v1", api_key="{local_model_api_key}")
+    messages = [{{"role": "user", "content": "{query_escaped}"}}]
+
+    for _ in range(10):
+        resp = client.chat.completions.create(
+            model="{local_model_name}",
+            messages=messages,
+            tools=openai_tools if openai_tools else None
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
+            messages.append(choice.message)
+            for tc in choice.message.tool_calls:
+                tool = next((t for t in lc_tools if t.name == tc.function.name), None)
+                if tool:
+                    result = await tool.ainvoke(json.loads(tc.function.arguments))
+                    messages.append({{"role": "tool", "tool_call_id": tc.id, "content": str(result)}})
+        else:
+            print(json.dumps({{"text": choice.message.content or ""}}))
+            break
+
+asyncio.run(run_mcp())
+'''
+
+            else:
+                return {"text": f"Unsupported provider for subprocess path: {advanced_llm_provider}"}
+
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
                 f.write(script_content)
                 script_path = f.name
 
             try:
-                # Run the script in a separate process (no eventlet!)
                 logger.info(f"Running MCP in subprocess: {script_path}")
                 result = subprocess.run(
-                    ['python', script_path],
+                    [sys.executable, script_path],
                     capture_output=True,
                     text=True,
                     timeout=120
                 )
                 if result.returncode == 0:
-                    output = json.loads(result.stdout.strip())
-                    logger.info(f"Subprocess completed with response {output}")
-                    resonse = self.llm.generate(f"clean it and Summarize the following response concisely:\n\n{output} for the user query {query}")
-                    return resonse
+                    raw_output = json.loads(result.stdout.strip())
+                    logger.info(f"Subprocess completed: {raw_output}")
+                    response = self.llm.generate(
+                        f"Clean and summarize the following response concisely for the user query: {query}\n\n{raw_output}"
+                    )
+                    return {"text": response}
                 else:
                     logger.error(f"Subprocess failed: {result.stderr}")
-                    raise Exception(f"Subprocess error: {result.stderr}")
-
+                    raise RuntimeError(f"Subprocess error: {result.stderr}")
             finally:
                 try:
                     os.unlink(script_path)
-                except:
+                except OSError:
                     pass
 
         except subprocess.TimeoutExpired:
@@ -251,48 +329,76 @@ if __name__ == "__main__":
             return {"text": "Request timed out after 120 seconds. Please try again."}
 
         except Exception as e:
-            logger.error(f"MCP execution failed, falling back to RAG: {e}")
+            logger.error(f"MCP subprocess failed, falling back to RAG: {e}")
             traceback.print_exc()
+            return self._rag_fallback(query)
 
-            # Fallback to RAG-based approach
-            try:
-                from app.prompts.rag_prompts import RETRIEVE_PROMPT
-                from qdrant_client import QdrantClient
+    def _handle_mcp_async(self, query: str, token: str) -> dict:
+        """Run MCP directly via asyncio — works fine with OpenAI (no eventlet)."""
+        try:
+            return asyncio.run(self._run_mcp_openai(query, token))
+        except Exception as e:
+            logger.error(f"Async MCP failed: {e}")
+            traceback.print_exc()
+            return self._rag_fallback(query)
 
-                GALAXY_TOOLS_RECOMMEND_COLLECTION = os.getenv("GALAXY_TOOLS_RECOMMEND_COLLECTION")
-                qdrant_url = os.getenv("galaxy_QDRANT_CLIENT")
+    async def _run_mcp_openai(self, query: str, token: str) -> dict:
+        from langgraph.prebuilt import create_react_agent
 
-                if not qdrant_url or not GALAXY_TOOLS_RECOMMEND_COLLECTION:
-                    logger.error("Missing environment variables for RAG fallback")
-                    return {"text": "Configuration error: Unable to process request"}
+        client = MultiServerMCPClient({
+            "galaxyTools": {
+                "transport": "streamable_http",
+                "url": GALAXY_MCP_SERVER,
+                "headers": {"Authorization": f"Bearer {token}"},
+            }
+        })
 
-                client = QdrantClient(
-                    url=qdrant_url,
-                    port=6333,
-                    grpc_port=6334,
-                    prefer_grpc=False,
-                )
+        tools = await client.get_tools()
+        agent = create_react_agent("openai:gpt-4o", tools)
+        response = await agent.ainvoke({"messages": query})
+        logger.info(f"OpenAI MCP raw response: {response}")
 
-                if not self.embedding_model:
-                    logger.error("Embedding model not initialized")
-                    return {"text": "Configuration error: Embedding model not available"}
+        messages = response.get("messages", [])
+        output = ""
+        for msg in reversed(messages):
+            content = getattr(msg, "content", None) or msg.get("content", "")
+            if content and isinstance(content, str):
+                output = content
+                break
+        return {"text": output or str(response)}
 
-                embedded_text = self.embedding_model(query)
-                result = client.search(
-                    collection_name=GALAXY_TOOLS_RECOMMEND_COLLECTION,
-                    query_vector=embedded_text,
-                    with_payload=True,
-                    score_threshold=0.5,
-                    limit=5
-                )
+    def _rag_fallback(self, query: str) -> dict:
+        """Falls back to Qdrant vector search when MCP is unavailable."""
+        logger.info("Attempting RAG fallback")
+        try:
+            from app.prompts.rag_prompts import RETRIEVE_PROMPT
+            from qdrant_client import QdrantClient
 
-                response = RETRIEVE_PROMPT.format(
-                    query=query,
-                    retrieved_content=result
-                )
-                return {"text": response}
+            GALAXY_TOOLS_RECOMMEND_COLLECTION = os.getenv("GALAXY_TOOLS_RECOMMEND_COLLECTION")
+            qdrant_url = os.getenv("galaxy_QDRANT_CLIENT")
 
-            except Exception as fallback_error:
-                logger.error(f"RAG fallback also failed: {fallback_error}")
-                traceback.print_exc()
-                return {"text": f"Error: Unable to process request. Please try again later."}
+            if not qdrant_url or not GALAXY_TOOLS_RECOMMEND_COLLECTION:
+                logger.error("Missing environment variables for RAG fallback")
+                return {"text": "Configuration error: Unable to process request"}
+
+            client = QdrantClient(url=qdrant_url, port=6333, grpc_port=6334, prefer_grpc=False)
+
+            if not self.embedding_model:
+                logger.error("Embedding model not initialized")
+                return {"text": "Configuration error: Embedding model not available"}
+
+            embedded_text = self.embedding_model(query)
+            result = client.search(
+                collection_name=GALAXY_TOOLS_RECOMMEND_COLLECTION,
+                query_vector=embedded_text,
+                with_payload=True,
+                score_threshold=0.5,
+                limit=5
+            )
+            response = RETRIEVE_PROMPT.format(query=query, retrieved_content=result)
+            return {"text": response}
+
+        except Exception as e:
+            logger.error(f"RAG fallback also failed: {e}")
+            traceback.print_exc()
+            return {"text": "Error: Unable to process request. Please try again later."}

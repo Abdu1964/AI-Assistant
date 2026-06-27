@@ -5,7 +5,6 @@ from biocypher import BioCypher
 from flask import current_app, jsonify
 import yaml
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class SchemaHandler:
@@ -22,24 +21,22 @@ class SchemaHandler:
         except Exception as e:
             logger.error(f"Unable to initialize Schema Handler: {e}")
 
+    def _register_schema_entry(self, result, value, source, target, label):
+        key_label = f'{source}-{label}-{target}' if source and target else label
+        result[key_label] = {**value, "key": key_label}
+
     def process_schema(self, schema):
-        process_schema = {}
+        result = {}
         for _, value in schema.items():
-            input_label = value.get("input_label")
-            output_label = value.get("output_label")
+            label = value.get("output_label") or value.get("input_label")
             source = value.get("source")
             target = value.get("target")
-
-            label = output_label if output_label else input_label
             if isinstance(label, list):
                 for i_label in label:
-                    key_label = f'{source}-{i_label}-{target}' if source and target else i_label
-                    process_schema[key_label] = {**value, "key": key_label}
+                    self._register_schema_entry(result, value, source, target, i_label)
             else:
-                key_label = f'{source}-{label}-{target}' if source and target else label
-                process_schema[key_label] = {**value, "key": key_label}
-
-        return process_schema
+                self._register_schema_entry(result, value, source, target, label)
+        return result
     
     def get_parent_nodes(self):
         parent_nodes = set()
@@ -66,7 +63,7 @@ class SchemaHandler:
                 if key in self.parent_nodes:
                     continue
                 parent = value['is_a']
-                currNode = {
+                curr_node = {
                     'type': key,
                     'is_a': parent,
                     'label': value['input_label'],
@@ -74,7 +71,7 @@ class SchemaHandler:
                 }
                 if parent not in nodes:
                     nodes[parent] = []
-                nodes[parent].append(currNode)
+                nodes[parent].append(curr_node)
 
         return [{'child_nodes': nodes[key], 'parent_node': key} for key in nodes]
 
@@ -116,6 +113,7 @@ class SchemaHandler:
                         relations.append(relation)
         return relations
 
+    @staticmethod
     def get_schema(schema_path):
         with open(schema_path, 'r') as file:
             prime_service = yaml.safe_load(file)
@@ -134,51 +132,41 @@ class SchemaHandler:
 
         return schema  
     
+    def _process_edge_entry(self, adj_list, k, v):
+        if "." in k:
+            return
+        if v.get("represented_as") != "edge" or "source" not in v or "target" not in v:
+            return
+        source = v.get("source")
+        target = v.get("target")
+        label = v.get("output_label") or v.get("input_label")
+        if not source or not target or not label:
+            return
+        sources = [source] if isinstance(source, str) else source
+        targets = [target] if isinstance(target, str) else target
+        for s in sources:
+            s = s.replace(" ", "_")
+            if s in self.parent_nodes:
+                continue
+            adj_list.setdefault(s, {}).setdefault(label, [])
+            for t in targets:
+                t = t.replace(" ", "_")
+                if t not in self.parent_nodes and t not in adj_list[s][label]:
+                    adj_list[s][label].append(t)
+
     def get_adjacency_list(self):
         adj_list = {}
         for k, v in self.schema.items():
-            if "." in k:
-                continue
-            if v.get("represented_as") == "edge" and \
-                "source" in v and "target" in v:
-                source = v.get("source")
-                target = v.get("target")
-                label = v.get("input_label")
-                output_label = v.get("output_label")
-                if output_label:
-                    label = output_label
-                if not source or not target or not label:
-                    continue
-                if isinstance(source, str):
-                    source = [source]
-                if isinstance(target, str):
-                    target = [target]
-                for s in source:
-                    s = s.replace(" ", "_")
-                    if s in self.parent_nodes:
-                        continue
-                    if s not in adj_list:
-                        adj_list[s] = {}
-                    if label not in adj_list[s]:
-                        adj_list[s][label] = []
-                    for t in target:
-                        t = t.replace(" ", "_")
-                        if t in self.parent_nodes:
-                            continue
-                        if t not in adj_list[s][label]:
-                            adj_list[s][label].append(t)
-
+            self._process_edge_entry(adj_list, k, v)
         return adj_list
     
     def build_graph(self, schema_relationship):
-        # schema_relationship = generate_schema_relationship()
-
         import os
         import pickle
         if os.path.exists(self.graph_file):
             with open(self.graph_file, 'rb') as f:
                 graph = pickle.load(f)
-            print("Retrieved graph from storage.")
+            logger.debug("Retrieved graph from storage.")
             return graph
 
         # If no stored graph, build a new one

@@ -9,10 +9,13 @@ from app.llm_handle.llm_models import LLMInterface
 from app.prompts.annotation_prompts import (
     EXTRACT_RELEVANT_INFORMATION_PROMPT,
     JSON_CONVERSION_PROMPT,
+    ORGANISM_DETECTION_PROMPT,
     SELECT_PROPERTY_VALUE_PROMPT,
+    SELECT_PROPERTY_VALUES_BATCH_PROMPT,
     RESULT_SUMMARIZATION_PROMPT,
 )
 from app.socket_manager import emit_to_user
+from app.storage.redis import redis_manager
 from .json_to_cypher import JsonToCypherConverter
 
 
@@ -25,17 +28,43 @@ load_dotenv()
 
 
 class Graph:
-    def __init__(self, llm: LLMInterface, schema_handler: SchemaHandler) -> None:
+    def __init__(self, llm: LLMInterface, schema_handler: SchemaHandler, fly_schema_handler: SchemaHandler = None) -> None:
         self.llm = llm
         self.schema_handler = schema_handler
-        self.enhanced_schema = (
-            schema_handler.enhanced_schema
-        )  # Enhanced or preprocessed schema
+        self.enhanced_schema = schema_handler.enhanced_schema
         self.neo4j = Neo4jConnection(
             uri=os.getenv("NEO4J_URI"),
             username=os.getenv("NEO4J_USERNAME"),
             password=os.getenv("NEO4J_PASSWORD"),
         )
+
+        # Fly organism resources (schema + separate Neo4j connection)
+        self.fly_schema_handler = fly_schema_handler
+        self.fly_enhanced_schema = fly_schema_handler.enhanced_schema if fly_schema_handler else None
+        self.fly_neo4j = Neo4jConnection(
+            uri=os.getenv("FLY_NEO4J_URI"),
+            username=os.getenv("FLY_NEO4J_USERNAME"),
+            password=os.getenv("FLY_NEO4J_PASSWORD"),
+        ) if os.getenv("FLY_NEO4J_URI") else None
+        # Pending annotation confirmations — Redis-backed (cross-process), in-memory fallback
+        self._redis = redis_manager
+        self._pending_fallback: dict = {}  # used only when Redis is unavailable
+        self._PENDING_TTL = 600  # 10 minutes
+
+        # Maps node type → the Neo4j property to use when searching by the JSON `id` field
+        self._node_id_property = {
+            "gene": "gene_name",
+            "transcript": "transcript_id",
+            "exon": "exon_id",
+            "protein": "protein_id",
+            "variant": "variant_id",
+            "pathway": "pathway_name",
+            "go_term": "go_id",
+            "tad": "tad_id",
+            "regulatory_element": "regulatory_element_id",
+            "enhancer": "enhancer_id",
+            "promoter": "promoter_id",
+        }
 
     def query_knowledge_graph(self, json_query, token):
         """
@@ -97,6 +126,7 @@ class Graph:
             return {
                 "text": None,
                 "json_format": initial_json,
+                "organism": "human",
                 "resource": {"id": None, "type": "annotation"},
             }
 
@@ -110,6 +140,7 @@ class Graph:
         return {
             "text": None,
             "json_format": validated_json,
+            "organism": "human",
             "resource": {"id": None, "type": "annotation"},
         }
 
@@ -117,8 +148,8 @@ class Graph:
         try:
             graph = self.query_knowledge_graph(validated_json, token)
 
-            # Generate final answer using validated JSON
-            # final_answer = self._provide_text_response(query, validated_json, graph)
+
+
             response = {
                 "text": graph["answer"],
                 "resource": {"id": graph["annotation_id"], "type": "annotation"},
@@ -135,11 +166,44 @@ class Graph:
                 "text": f"I apologize, but I wasn't able to generate the graph you requested. Could you please rephrase your question or provide additional details so I can better understand what you're looking for?"
             }
 
-    def _extract_relevant_information(self, query):
+    def _detect_organism(self, query) -> str:
+        q_lower = query.lower()
+        fly_keywords = [
+            # organism names
+            "drosophila", "melanogaster", "dmel", "fruit fly", "fly schema",
+            # flybase id prefixes
+            "fbgn", "fbal", "fbtr", "fbbt", "fbdv", "fbrf",
+            # fly-exclusive gene names (absent in human)
+            " wg ", " hh ", " dpp ", " arm ", " ci ", " nkd ", " ptc ", " smo ",
+            " bsk ", " hep ", " yki ", " sd ", " eve ", " ftz ", " vg ",
+            " en ", " sev ", " boss ", " cos2 ", " puc ", " lats ", " wts ",
+            # fly anatomy / tissue / cell terms
+            "wing disc", "eye disc", "leg disc", "imaginal disc",
+            "fat body", "hemocyte", "plasmatocyte", "crystal cell",
+            "oenocyte", "malpighian", "salivary gland polytene",
+            "dorsal vessel", "ring gland", "follicle cell", "nurse cell",
+            # fly cell lines
+            "s2 cell",
+        ]
+        if any(kw in q_lower for kw in fly_keywords):
+            return "fly"
+        try:
+            prompt = ORGANISM_DETECTION_PROMPT.format(query=query)
+            result = self.llm.generate(prompt)
+            organism = str(result).strip().lower()
+            if "fly" in organism:
+                return "fly"
+            return "human"
+        except Exception as e:
+            logger.warning(f"Organism detection failed, defaulting to human: {e}")
+            return "human"
+
+    def _extract_relevant_information(self, query, enhanced_schema=None):
         try:
             logger.info("Extracting relevant information from the query.")
+            schema = enhanced_schema if enhanced_schema is not None else self.enhanced_schema
             prompt = EXTRACT_RELEVANT_INFORMATION_PROMPT.format(
-                schema=self.enhanced_schema, query=query
+                schema=schema, query=query
             )
             extracted_info = self.llm.generate(prompt)
             logger.info(f"Extracted data: \n{extracted_info}")
@@ -148,13 +212,14 @@ class Graph:
             logger.error(f"Failed to extract relevant information: {e}")
             raise
 
-    def _convert_to_annotation_json(self, relevant_information, query):
+    def _convert_to_annotation_json(self, relevant_information, query, enhanced_schema=None):
         try:
             logger.info("Converting relevant information to annotation JSON format.")
+            schema = enhanced_schema if enhanced_schema is not None else self.enhanced_schema
             prompt = JSON_CONVERSION_PROMPT.format(
                 query=query,
                 extracted_information=relevant_information,
-                schema=self.enhanced_schema,
+                schema=schema,
             )
             json_data = self.llm.generate(prompt)
             logger.info(f"Converted JSON:\n{json.dumps(json_data, indent=2)}")
@@ -163,14 +228,17 @@ class Graph:
             logger.error(f"Failed to convert information to annotation JSON: {e}")
             raise
 
-    def _validate_and_update(self, initial_json):
+    def _validate_and_update(self, initial_json, neo4j=None, schema_handler=None):
         try:
             logger.info("Validating and updating the JSON structure.")
+            _neo4j = neo4j if neo4j is not None else self.neo4j
+            _schema_handler = schema_handler if schema_handler is not None else self.schema_handler
             node_types = {}
             validation_report = {
                 "property_changes": [],
                 "direction_changes": [],
                 "removed_properties": [],
+                "failed_nodes": [],
                 "validation_status": "success",
             }
 
@@ -181,11 +249,116 @@ class Graph:
             if "nodes" not in updated_json:
                 raise ValueError("The input JSON must contain a 'nodes' key.")
 
+            # Pre-pass: collect all values that need Neo4j lookup grouped by (node_type, property_key)
+            lookup_needed = {}  # (node_type, property_key) -> set of string values
+            for node in updated_json.get("nodes"):
+                node_type = node.get("type")
+                properties = node.get("properties", {})
+
+                # Also validate the `id` field using the node type's primary property
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        lookup_needed.setdefault((node_type, id_prop), set()).add(node_db_id)
+
+                for property_key, property_value in properties.items():
+                    if not property_value and property_value != 0:
+                        continue
+                    if node.get("is_list") and isinstance(property_value, (str, list)):
+                        items = (
+                            [i.strip() for i in property_value.split(",") if i.strip()]
+                            if isinstance(property_value, str)
+                            else property_value
+                        )
+                        lookup_needed.setdefault((node_type, property_key), set()).update(items)
+                    elif isinstance(property_value, str):
+                        lookup_needed.setdefault((node_type, property_key), set()).add(property_value)
+
+            # Run one batch Neo4j query per (node_type, property_key)
+            similarity_cache = {}  # (node_type, property_key, value) -> [(similar_value, score), ...]
+            for (node_type, property_key), values in lookup_needed.items():
+                batch = _neo4j.get_similar_property_values_batch(node_type, property_key, list(values))
+                for value, matches in batch.items():
+                    similarity_cache[(node_type, property_key, value)] = matches
+
+            # Pre-pass: collect non-exact items for a single batched LLM call
+            batch_for_llm = {}  # item -> [(candidate, score), ...]
+            for node in updated_json.get("nodes"):
+                node_type = node.get("type")
+                properties = node.get("properties", {})
+
+                # Check id field
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        similar = similarity_cache.get((node_type, id_prop, node_db_id), [])
+                        if similar:
+                            if similar[0][0].lower() != node_db_id.lower():
+                                batch_for_llm[node_db_id] = similar
+                        else:
+                            # No Neo4j candidates at all — still needs confirmation with empty list
+                            batch_for_llm[node_db_id] = []
+
+                for property_key, property_value in properties.items():
+                    if not property_value and property_value != 0:
+                        continue
+                    if node.get("is_list") and isinstance(property_value, (str, list)):
+                        items = (
+                            [i.strip() for i in property_value.split(",") if i.strip()]
+                            if isinstance(property_value, str) else property_value
+                        )
+                        for item in items:
+                            similar = similarity_cache.get((node_type, property_key, item), [])
+                            if similar:
+                                if similar[0][0].lower() != item.lower():
+                                    batch_for_llm[item] = similar
+                            else:
+                                batch_for_llm[item] = []
+                    elif isinstance(property_value, str):
+                        similar = similarity_cache.get((node_type, property_key, property_value), [])
+                        if similar:
+                            if similar[0][0].lower() != property_value.lower():
+                                batch_for_llm[property_value] = similar
+                        else:
+                            batch_for_llm[property_value] = []
+
+            # One LLM call for all ambiguous items → {item: {"value": ..., "auto_accept": bool} | None}
+            llm_picks = self._select_best_matching_values_batch(batch_for_llm)
+
             for node in updated_json.get("nodes"):
                 node_type = node.get("type")
                 properties = node.get("properties", {})
                 node_id = node.get("node_id")
                 node_types[node_id] = node_type
+                if not node.get("is_list"):
+                    node["status"] = True
+
+                # Validate `id` field if set
+                node_db_id = node.get("id", "")
+                if node_db_id:
+                    id_prop = self._node_id_property.get(node_type.lower())
+                    if id_prop:
+                        similar_values = similarity_cache.get((node_type, id_prop, node_db_id), [])
+                        if similar_values and similar_values[0][0].lower() == node_db_id.lower():
+                            pass  # exact match — fine
+                        else:
+                            pick = llm_picks.get(node_db_id)
+                            top = similar_values[0][0] if similar_values else None
+                            suggestion = (pick["value"] if pick and not pick.get("auto_accept") else
+                                          (pick["value"] if pick and pick.get("auto_accept") else top))
+                            if pick and pick.get("auto_accept"):
+                                # Trivial difference — silently fix the id
+                                node["id"] = pick["value"]
+                            else:
+                                # Genuinely different or no LLM pick — ask user
+                                node["status"] = False
+                                node["needs_confirmation"] = True
+                                node["pending_substitutions"] = {node_db_id: suggestion or node_db_id}
+                                validation_report["failed_nodes"].append(
+                                    {"node_id": node_id, "reason": f"'{node_db_id}' not found in database"}
+                                )
 
                 # Track removed properties
                 for property_key in list(properties.keys()):
@@ -201,68 +374,132 @@ class Graph:
                                 "original_value": property_value,
                             }
                         )
-                    elif isinstance(property_value, str):
-                        similar_values = self.neo4j.get_similar_property_values(
-                            node_type, property_key, property_value
+                    elif node.get("is_list") and isinstance(property_value, (str, list)):
+                        items = (
+                            [i.strip() for i in property_value.split(",") if i.strip()]
+                            if isinstance(property_value, str)
+                            else property_value
                         )
+                        validated_items = []
+                        failed_items = []
+                        item_suggestions = {}
+                        for item in items:
+                            similar_values = similarity_cache.get((node_type, property_key, item), [])
+                            if similar_values:
+                                top = similar_values[0][0]
+                                if top.lower() == item.lower():
+                                    # Exact case match — auto-accept
+                                    validated_items.append(top)
+                                else:
+                                    pick = llm_picks.get(item)
+                                    if pick is None:
+                                        # LLM says no clear match — still ask with the top Neo4j result
+                                        failed_items.append(item)
+                                        if similar_values:
+                                            item_suggestions[item] = similar_values[0][0]
+                                    elif pick.get("auto_accept"):
+                                        # Trivial typo/case/punctuation — silently fix
+                                        validated_items.append(pick["value"])
+                                    else:
+                                        # Genuinely different entity — ask user
+                                        failed_items.append(item)
+                                        item_suggestions[item] = pick["value"]
+                            else:
+                                failed_items.append(item)
 
-                        if similar_values:
-                            selected_property = (
-                                self._select_best_matching_property_value(
-                                    property_value, similar_values
-                                )
+                        confirmable = {
+                            item: item_suggestions[item]
+                            for item in failed_items if item in item_suggestions
+                        }
+                        truly_missing = [item for item in failed_items if item not in item_suggestions]
+
+                        properties[property_key] = ", ".join(validated_items + truly_missing)
+                        if failed_items:
+                            node["status"] = False
+                            if confirmable:
+                                node["needs_confirmation"] = True
+                                node["pending_substitutions"] = confirmable
+                                node["all_list_values"] = list(items)
+                            if truly_missing:
+                                node["not_validated"] = truly_missing
+                            validation_report["failed_nodes"].append(
+                                {"node_id": node_id, "reason": f"Could not find in database: {failed_items}"}
                             )
+                        else:
+                            node["status"] = True
 
-                            if selected_property.get("selected_value"):
-                                new_value = selected_property.get("selected_value")
-                                if new_value != property_value:
-                                    validation_report["property_changes"].append(
+                    elif isinstance(property_value, str):
+                        similar_values = similarity_cache.get((node_type, property_key, property_value), [])
+                        if similar_values:
+                            top = similar_values[0][0]
+                            if top.lower() == property_value.lower():
+                                # Exact case match — auto-accept
+                                properties[property_key] = top
+                            else:
+                                pick = llm_picks.get(property_value)
+                                if pick is None:
+                                    # LLM unsure — still ask with the top Neo4j result
+                                    node["status"] = False
+                                    node["needs_confirmation"] = True
+                                    node["pending_substitutions"] = {property_value: top}
+                                    validation_report["failed_nodes"].append(
+                                        {"node_id": node_id, "reason": f"'{property_value}' not found; nearest is '{top}'"}
+                                    )
+                                elif pick.get("auto_accept"):
+                                    # Trivial difference — silently fix
+                                    properties[property_key] = pick["value"]
+                                else:
+                                    # Genuinely different — ask user
+                                    node["status"] = False
+                                    node["needs_confirmation"] = True
+                                    node["pending_substitutions"] = {property_value: pick["value"]}
+                                    validation_report["failed_nodes"].append(
                                         {
-                                            "node_type": node_type,
                                             "node_id": node_id,
-                                            "property": property_key,
-                                            "original_value": property_value,
-                                            "new_value": new_value,
-                                            "similar_values": similar_values,
+                                            "reason": f"'{property_value}' not found; nearest match is '{pick['value']}'",
                                         }
                                     )
-                                properties[property_key] = new_value
-                            else:
-                                raise ValueError(
-                                    f"No suitable property found for {node_type} with key {property_key} "
-                                    f"and value {property_value}."
-                                )
                         else:
-                            raise ValueError(
-                                f"No suitable property found for {node_type} with key {property_key} "
-                                f"and value {property_value}."
+                            node["status"] = False
+                            node["validation_error"] = f"'{property_value}' not found in the database."
+                            validation_report["failed_nodes"].append(
+                                {"node_id": node_id, "reason": node["validation_error"]}
                             )
 
-            # Validate edge direction
+            # Validate edge direction — remove edges that don't exist in the schema
+            valid_predicates = []
             for edge in updated_json.get("predicates", []):
                 s = node_types.get(edge["source"])
                 t = node_types.get(edge["target"])
                 rel = edge["type"]
                 conn = f"{s}-{rel}-{t}"
 
-                if conn not in self.schema_handler.processed_schema:
+                if conn in _schema_handler.processed_schema:
+                    valid_predicates.append(edge)
+                else:
                     rev = f"{t}-{rel}-{s}"
-                    if rev not in self.schema_handler.processed_schema:
-                        raise ValueError(
-                            f"Invalid source {s} and target {t} for predicate {rel}"
+                    if rev in _schema_handler.processed_schema:
+                        # Swap direction and keep
+                        validation_report["direction_changes"].append(
+                            {"relation_type": rel, "original": f"{s} → {t}", "corrected": f"{t} → {s}"}
                         )
-                    # Track direction changes
-                    validation_report["direction_changes"].append(
-                        {
-                            "relation_type": rel,
-                            "original": f"{s} → {t}",
-                            "corrected": f"{t} → {s}",
-                        }
-                    )
-                    # Swap source and target
-                    temp_s = edge["source"]
-                    edge["source"] = edge["target"]
-                    edge["target"] = temp_s
+                        edge["source"], edge["target"] = edge["target"], edge["source"]
+                        valid_predicates.append(edge)
+                    else:
+                        # Not in schema at all — drop it silently
+                        logger.warning(f"Dropping invalid predicate: {conn}")
+                        validation_report.setdefault("removed_predicates", []).append(
+                            {"type": rel, "source": s, "target": t}
+                        )
+            updated_json["predicates"] = valid_predicates
+
+            for node in updated_json.get("nodes", []):
+                node.pop("is_list", None)
+
+            # Remove duplicate nodes (same type + properties) the LLM may have hallucinated
+            updated_json["nodes"] = self._deduplicate_nodes(
+                updated_json.get("nodes", []), updated_json.get("predicates", [])
+            )
 
             logger.info(
                 f"Validated and updated JSON: \n{json.dumps(updated_json, indent=2)}"
@@ -271,6 +508,7 @@ class Graph:
             return {
                 "updated_json": updated_json,
                 "validation_report": validation_report,
+                "candidates": batch_for_llm,  # {item: [(candidate, score), ...]}
             }
 
         except Exception as e:
@@ -280,6 +518,7 @@ class Graph:
             return {
                 "updated_json": initial_json,
                 "validation_report": validation_report,
+                "candidates": {},
             }
 
     def _select_best_matching_property_value(self, user_input_value, possible_values):
@@ -293,6 +532,300 @@ class Graph:
         except Exception as e:
             logger.error(f"Failed to select property value: {e}")
             raise
+
+    def _select_best_matching_values_batch(self, items_with_candidates: dict) -> dict:
+        """One LLM call for all ambiguous items.
+        Returns {item: {"value": str, "auto_accept": bool} | None}
+        """
+        if not items_with_candidates:
+            return {}
+        items_repr = {
+            item: [{"value": v, "similarity": round(s, 2)} for v, s in candidates[:5]]
+            for item, candidates in items_with_candidates.items()
+        }
+        prompt = SELECT_PROPERTY_VALUES_BATCH_PROMPT.format(
+            items_json=json.dumps(items_repr, indent=2)
+        )
+        result = self.llm.generate(prompt)
+        logger.info(f"Batch LLM picks: {result}")
+        if isinstance(result, dict):
+            out = {}
+            for k, v in result.items():
+                if v is None or str(v).lower() == "null":
+                    out[k] = None
+                elif isinstance(v, dict) and "value" in v:
+                    out[k] = {"value": v["value"], "auto_accept": bool(v.get("auto_accept", False))}
+                else:
+                    out[k] = None
+            return out
+        return {item: None for item in items_with_candidates}
+
+    # ── Pending state helpers (Redis-backed, in-memory fallback) ─────────────
+
+    def _set_pending(self, user_id: str, data: dict):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            self._redis.client.set(key, json.dumps(data), ex=self._PENDING_TTL)
+        else:
+            self._pending_fallback[user_id] = data
+
+    def _get_pending(self, user_id: str):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            raw = self._redis.client.get(key)
+            return json.loads(raw) if raw else None
+        return self._pending_fallback.get(user_id)
+
+    def _clear_pending(self, user_id: str):
+        key = f"annotation_pending:{user_id}"
+        if self._redis.is_available:
+            self._redis.client.delete(key)
+        else:
+            self._pending_fallback.pop(user_id, None)
+
+    # ── Confirmation flow ─────────────────────────────────────────────────────
+
+    def has_pending_for(self, user_id: str) -> bool:
+        return self._get_pending(user_id) is not None
+
+    def handle_confirmation_response(self, user_id: str, query: str):
+        """Call from assistant_response when a pending confirmation exists.
+        Returns a ready response dict, or None if query is a new unrelated question.
+        """
+        entry = self._get_pending(user_id)
+        if not entry:
+            return None
+
+        pending_json = entry["json"]
+        candidates  = entry.get("candidates", {})
+        unconfirmed = entry.get("unconfirmed", [])
+        pending_organism = entry.get("organism", "human")
+
+        verdict = self._classify_confirmation(query)
+
+        if verdict == "confirm":
+            resolved = self._apply_pending_substitutions(pending_json, apply=True)
+            self._clear_pending(user_id)
+            return {
+                "text": "Got it! I've built the annotation structure using the confirmed match. The structured data is ready.",
+                "json_format": resolved,
+                "organism": pending_organism,
+                "agents_completed": ["annotation_agent"],
+            }
+
+        if verdict == "reject":
+            resolved = self._apply_pending_substitutions(pending_json, apply=False)
+            self._clear_pending(user_id)
+            return {
+                "text": "Understood! I've built the annotation structure without the unidentified node. The structured data is ready.",
+                "json_format": resolved,
+                "organism": pending_organism,
+                "agents_completed": ["annotation_agent"],
+            }
+
+        if verdict == "show_alternatives":
+            # Show the other Neo4j candidates — keep pending active so user can still confirm/reject
+            lines = []
+            for u in unconfirmed:
+                original  = u["original"]
+                all_cands = candidates.get(original, [])
+                # Skip the already-suggested top hit; show the rest
+                suggestion = u["suggestion"]
+                others = [(v, s) for v, s in all_cands if v != suggestion]
+                if others:
+                    others_str = ", ".join(f"**{v}** ({round(s*100)}% similar)" for v, s in others[:4])
+                    lines.append(
+                        f"Other candidates for **'{original}'** in the database: {others_str}.\n"
+                        f"The closest remains **'{suggestion}'**. "
+                        f"Reply with the name you'd like to use, or say **yes** to use '{suggestion}', "
+                        f"or **no** to build without it."
+                    )
+                else:
+                    lines.append(
+                        f"There are no other similar entries for **'{original}'** in the database. "
+                        f"The only close match is **'{suggestion}'**. "
+                        f"Say **yes** to use it or **no** to build without it."
+                    )
+            return {
+                "text": "\n\n".join(lines),
+                "json_format": None,
+                "agents_completed": ["annotation_agent"],
+            }
+
+        # New unrelated query — clear stale state and proceed normally
+        self._clear_pending(user_id)
+        return None
+
+    def _classify_confirmation(self, message: str) -> str:
+        """Uses the LLM to understand what the user meant — no keyword matching."""
+        prompt = (
+            f"The assistant asked the user to confirm whether to substitute an unrecognised "
+            f"database entry with a suggested match. The user replied:\n\n"
+            f"\"{message}\"\n\n"
+            f"Classify the user's intent as exactly one of:\n"
+            f"- confirm           — user agrees to use the suggested match "
+            f"(e.g. 'yes', 'sure', 'use it', 'go ahead', 'that works', 'use ZNF697')\n"
+            f"- reject            — user wants to build without the unidentified node "
+            f"(e.g. 'no', 'skip it', 'build without', 'leave it out')\n"
+            f"- show_alternatives — user wants to see other possible matches from the database "
+            f"(e.g. 'find another', 'show me others', 'what else is there', 'forgot the name')\n"
+            f"- new_query         — user is asking something completely unrelated to the confirmation\n\n"
+            f"Reply with only one word: confirm, reject, show_alternatives, or new_query."
+        )
+        try:
+            result = self.llm.generate(prompt)
+            verdict = result.strip().lower().split()[0] if result else "new_query"
+            return verdict if verdict in ("confirm", "reject", "show_alternatives", "new_query") else "new_query"
+        except Exception:
+            return "new_query"
+
+    def _apply_pending_substitutions(self, pending_json: dict, apply: bool = True) -> dict:
+        result = copy.deepcopy(pending_json)
+        for node in result.get("nodes", []):
+            if not (node.get("needs_confirmation") and node.get("pending_substitutions")):
+                continue
+            if apply:
+                subs = node["pending_substitutions"]
+
+                # Handle id-field substitution: move result to the correct property
+                node_id_val = node.get("id", "")
+                if node_id_val and node_id_val in subs:
+                    suggested = subs[node_id_val]
+                    id_prop = self._node_id_property.get(node.get("type", "").lower())
+                    if id_prop:
+                        node.setdefault("properties", {})[id_prop] = suggested
+                    node["id"] = ""
+
+                # Handle property-value substitutions
+                for prop_key, prop_val in node.get("properties", {}).items():
+                    if not isinstance(prop_val, str):
+                        continue
+                    parts = [p.strip() for p in prop_val.split(",") if p.strip()]
+                    replaced = set()
+                    new_parts = []
+                    for part in parts:
+                        replacement = next(
+                            (sugg for orig, sugg in subs.items() if part.lower() == orig.lower()),
+                            None,
+                        )
+                        if replacement:
+                            new_parts.append(replacement)
+                            replaced.add(part.lower())
+                        else:
+                            new_parts.append(part)
+                    existing_lower = {p.lower() for p in new_parts}
+                    for orig, sugg in subs.items():
+                        if orig.lower() not in replaced and sugg.lower() not in existing_lower:
+                            new_parts.append(sugg)
+                            existing_lower.add(sugg.lower())
+                    node["properties"][prop_key] = ", ".join(new_parts)
+            node["status"] = True
+            for key in ("needs_confirmation", "pending_substitutions", "all_list_values",
+                        "not_validated", "validation_error"):
+                node.pop(key, None)
+
+        # Deduplicate nodes that ended up with identical type + properties after substitution
+        result["nodes"] = self._deduplicate_nodes(result.get("nodes", []), result.get("predicates", []))
+        return result
+
+    def _deduplicate_nodes(self, nodes: list, predicates: list) -> list:
+        """Remove nodes whose type+properties are exact duplicates of an earlier node.
+        Predicates that reference a removed duplicate are remapped to the surviving node.
+        """
+        seen = {}       # (type, frozenset(properties.items())) -> surviving node_id
+        removed = {}    # removed node_id -> surviving node_id
+        kept = []
+        for node in nodes:
+            key = (node.get("type", ""), frozenset(
+                (k, v) for k, v in node.get("properties", {}).items()
+            ))
+            if key in seen:
+                removed[node["node_id"]] = seen[key]
+            else:
+                seen[key] = node["node_id"]
+                kept.append(node)
+
+        # Remap predicates
+        if removed:
+            for pred in predicates:
+                if pred.get("source") in removed:
+                    pred["source"] = removed[pred["source"]]
+                if pred.get("target") in removed:
+                    pred["target"] = removed[pred["target"]]
+
+        return kept
+
+    def _describe_annotation_result(self, query: str, validated_json: dict) -> str:
+        """Generate a meaningful biological description from the query + validated JSON.
+        Replaces the generic 'structure created successfully' text so the aggregator
+        has real content to work with instead of hallucinating.
+        """
+        try:
+            nodes = validated_json.get("nodes", [])
+            predicates = validated_json.get("predicates", [])
+
+            node_id_to_label = {}
+            node_lines = []
+            for n in nodes:
+                nid  = n.get("node_id", "")
+                ntype = n.get("type", "unknown")
+                props = n.get("properties", {})
+                prop_str = ", ".join(f"{k}: {v}" for k, v in props.items()) if props else "(no properties)"
+                node_lines.append(f"- {ntype} [{nid}]: {prop_str}")
+                node_id_to_label[nid] = f"{ntype}({prop_str})"
+
+            pred_lines = []
+            for p in predicates:
+                src = node_id_to_label.get(p.get("source", ""), p.get("source", ""))
+                tgt = node_id_to_label.get(p.get("target", ""), p.get("target", ""))
+                pred_lines.append(f"- {src} --[{p.get('type', '')}]--> {tgt}")
+
+            structure_summary = "Nodes:\n" + "\n".join(node_lines)
+            if pred_lines:
+                structure_summary += "\n\nRelationships:\n" + "\n".join(pred_lines)
+
+            prompt = (
+                f"A user asked: \"{query}\"\n\n"
+                f"The following annotation structure was built from the database schema:\n\n"
+                f"{structure_summary}\n\n"
+                f"Write 1-3 sentences describing what this structure represents biologically "
+                f"and what query it will run. Be specific about the entities and relationships "
+                f"involved. Do NOT invent data, relationships, or biological facts not shown above. "
+                f"Do NOT mention the annotation system or technical details."
+            )
+            result = self.llm.generate(prompt)
+            return result.strip() if result else "The annotation structure was built successfully."
+        except Exception as e:
+            logger.warning(f"Failed to generate annotation description: {e}")
+            return "The annotation structure was built successfully."
+
+    def _build_confirmation_text(self, unconfirmed_nodes: list) -> str:
+        if len(unconfirmed_nodes) == 1:
+            u = unconfirmed_nodes[0]
+            all_vals = u.get("all_list_values") or []
+            known_vals = [v for v in all_vals if v != u["original"]]
+
+            base = (
+                f"I couldn't find **'{u['original']}'** in the database. "
+                f"The closest match I found is **'{u['suggestion']}'**.\n\n"
+                f"Should I go ahead and use **'{u['suggestion']}'** in place of **'{u['original']}'**?"
+            )
+            if known_vals:
+                base += f" Or would you like me to build the annotation without it, using only {known_vals}?"
+            else:
+                base += " Or would you like to cancel and try a different identifier?"
+            return base
+
+        lines = ["I couldn't find some of the nodes you mentioned in the database:"]
+        for u in unconfirmed_nodes:
+            lines.append(
+                f"  - **'{u['original']}'** — closest match is **'{u['suggestion']}'**"
+            )
+        lines.append(
+            "\nShould I go ahead with these substitutions? "
+            "Or would you prefer I build the annotation skipping the unrecognised nodes?"
+        )
+        return "\n".join(lines)
 
     def execute_cypher_query(self, cypher_query):
         # Execute a Cypher query against the Neo4j database and return structured results
@@ -354,7 +887,7 @@ class Graph:
                 # Check if this was a path query that should have returned relationships
                 is_path_query = any(
                     rel in cypher_query.lower()
-                    for rel in ["transcribed_to", "includes", "transcribed_from"]
+                    for rel in ["transcribes_to", "part_of", "transcribed_from", "translates_to"]
                 )
                 if is_path_query and counts["total_relationships"] == 0:
                     # this indicates an invalid query or missing data
@@ -552,13 +1085,27 @@ class Graph:
 
     def _handle_biological_query(self, query, user_id):
         try:
+            # Detect organism and select the right schema + Neo4j resources
+            organism = self._detect_organism(query)
+            if organism == "fly" and self.fly_schema_handler:
+                active_schema = self.fly_enhanced_schema
+                active_schema_handler = self.fly_schema_handler
+                active_neo4j = self.fly_neo4j if self.fly_neo4j else self.neo4j
+                logger.info("Organism detected: fly — using fly schema and Neo4j")
+            else:
+                organism = "human"
+                active_schema = self.enhanced_schema
+                active_schema_handler = self.schema_handler
+                active_neo4j = self.neo4j
+                logger.info("Organism detected: human — using human schema and Neo4j")
+
             # Extract and validate JSON query
             emit_to_user(
                 user=user_id,
                 message="Extracting relevant information from your query...",
             )
             try:
-                relevant_information = self._extract_relevant_information(query)
+                relevant_information = self._extract_relevant_information(query, enhanced_schema=active_schema)
                 logger.info("Relevant information extraction successful")
 
                 # Convert to initial JSON
@@ -566,34 +1113,60 @@ class Graph:
                     user=user_id, message="Validating Constructed Json Format..."
                 )
                 initial_json = self._convert_to_annotation_json(
-                    relevant_information, query
+                    relevant_information, query, enhanced_schema=active_schema
                 )
                 logger.info("Initial JSON conversion successful")
 
                 # Validate and update
-                validation = self._validate_and_update(initial_json)
+                validation = self._validate_and_update(initial_json, neo4j=active_neo4j, schema_handler=active_schema_handler)
                 logger.info("JSON validation successful")
 
-                if validation["validation_report"]["validation_status"] == "failed":
-                    logger.error("JSON validation failed")
-                    json_query = {
-                    "success" : True,
-                    "summary" : None,
-                    "json_format": initial_json,
-                    "resource": {"id": None, "type": "annotation"},
-                    }
-                else:
-                    # Use the updated JSON for subsequent steps
-                    json_query = {
-                        "success" : True,
-                        "summary" : None,
-                        "json_format": validation["updated_json"],
+                # Collect nodes that need user confirmation before the JSON can be finalised
+                unconfirmed_nodes = []
+                for node in validation["updated_json"].get("nodes", []):
+                    if node.get("needs_confirmation") and node.get("pending_substitutions"):
+                        for original, suggestion in node["pending_substitutions"].items():
+                            unconfirmed_nodes.append({
+                                "node_id": node.get("node_id"),
+                                "node_type": node.get("type"),
+                                "original": original,
+                                "suggestion": suggestion,
+                                "all_list_values": node.get("all_list_values", []),
+                            })
+
+                if unconfirmed_nodes:
+                    logger.info(f"Returning needs_confirmation for {len(unconfirmed_nodes)} node(s)")
+                    self._set_pending(user_id, {
+                        "json": validation["updated_json"],
+                        "candidates": validation.get("candidates", {}),
+                        "unconfirmed": unconfirmed_nodes,
+                        "organism": organism,
+                    })
+                    return {
+                        "success": True,
+                        "needs_confirmation": True,
+                        "confirmation_text": self._build_confirmation_text(unconfirmed_nodes),
+                        "summary": None,
+                        "json_format": None,
+                        "validation_report": validation["validation_report"],
                         "resource": {"id": None, "type": "annotation"},
                     }
 
+                summary = self._describe_annotation_result(query, validation["updated_json"])
+
+                updated_json = validation["updated_json"]
+                json_query = {
+                    "success": True,
+                    "summary": summary,
+                    "json_format": updated_json,
+                    "organism": organism,
+                    "validation_report": validation["validation_report"],
+                    "resource": {"id": None, "type": "annotation"},
+                }
+
                 logger.info("JSON query extraction successful")
                 logger.info(f"JSON query structure: {json.dumps(json_query, indent=2)}")
-                
+
                 return json_query
             
             except Exception as e:

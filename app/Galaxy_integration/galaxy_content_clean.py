@@ -121,12 +121,12 @@ class HTMLProcessor:
         text = re.sub(r'&nbsp;?', ' ', text)
         text = re.sub(r'^[A-Z]{1,3}(?:\s*\|\s*[A-Z]{1,3})+\s*$', '', text, flags=re.MULTILINE)
         text = re.sub(r'^[-\s\|]+$', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^\d+\s*\|(?:\s*\d*\s*\|?)+$', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^\d+\s*\|(?:\s*\d+\s*\|?)+$', '', text, flags=re.MULTILINE)
         text = re.sub(r'^\s*$', '', text, flags=re.MULTILINE)
 
         text = text.strip()
         logger.info(f"Extracted and cleaned text length: {len(text)} chars")
-        logger.info(f"Cleaned text content: {text}")
+        logger.debug(f"Cleaned text content: {text}")
         return text
 
 
@@ -207,7 +207,7 @@ Remember: Return ONLY the JSON object, nothing else.
                     continue
                     
                 logger.info(f"Extracted text length: {len(html_text)}")
-                logger.info(f"Extracted text preview: {html_text}")
+                logger.debug(f"Extracted text preview: {html_text}")
                 # Step 2: Clean and chunk
                 cleaned_text = self.deep_clean_text(html_text)
                 chunks = self.splitter.split_text(cleaned_text)
@@ -233,7 +233,7 @@ Remember: Return ONLY the JSON object, nothing else.
                         text=chunk,
                         previous_summary=prev_summary
                     )
-                    logger.info(f"Chunk {i} summary: {summary_text}")
+                    logger.debug(f"Chunk {i} summary: {summary_text}")
                     # Update prev_summary for the next iteration
                     prev_summary = summary_text
 

@@ -9,11 +9,36 @@ class JsonToCypherConverter:
     """
 
     def __init__(self):
-        self.supported_node_types = {"gene", "transcript", "exon"}
+        self.supported_node_types = {
+            "gene", "transcript", "exon", "protein",
+            "promoter", "enhancer", "super_enhancer", "non_coding_rna",
+            "regulatory_region", "snp", "structural_variant", "sequence_variant",
+            "pathway", "reaction", "tad", "motif", "tfbs",
+            "chromosome_chain", "chromosome",
+            "anatomy", "tissue", "cell_type", "cell_line",
+            "experimental_factor", "biological_process",
+            "molecular_function", "molecular_interaction", "cellular_component",
+            "developmental_stage", "disease", "phenotype",
+            "small_molecule", "sequence_type",
+        }
         self.supported_relationships = {
-            "transcribed_to",
-            "transcribed_from",
-            "includes",
+            "transcribes_to", "transcribed_from",
+            "translates_to", "translation_of",
+            "part_of", "expressed_in",
+            "participates_in", "involved_in",
+            "regulates", "negatively_regulates", "positively_regulates",
+            "binds_to", "in_tad_region",
+            "eqtl_association", "closest_gene",
+            "upstream_of", "downstream_of", "located_in",
+            "activity_by_contact", "accessible_in",
+            "chromatin_state", "in_dnase_I_hotspot", "histone_modification",
+            "interacts_with", "coexpressed_with",
+            "associated_with", "ortholog_of", "alters_binding",
+            "in_linkage_disequilibrium_with",
+            "enables", "produced_by",
+            "is_a", "capable_of", "has_xref", "equivalent_to",
+            "child_pathway_of", "parent_pathway_of",
+            "overlaps", "lower_resolution", "located_on_chain",
         }
 
     def convert_to_cypher(self, json_query):
@@ -133,33 +158,24 @@ class JsonToCypherConverter:
 
         return f"MATCH {', '.join(path_patterns)}", rel_vars
 
+    def _build_property_conditions(self, properties):
+        conditions = []
+        for key, value in properties.items():
+            if value and str(value).strip():
+                conditions.append(f"{key}: '{self._sanitize_value(value)}'")
+        return conditions
+
     def _build_node_pattern(self, node):
         node_id = node["node_id"]
         node_type = node["type"]
-
-        # Handle database ID vs properties
         if node["id"] and node["id"].strip():
-            # Database ID provided
-            return (
-                f"({node_id}:{node_type} {{id: '{self._sanitize_value(node['id'])}'}})"
-            )
-        else:
-            # No database ID, use properties if any
-            properties = node["properties"]
-            if properties and any(v for v in properties.values() if v):
-                # Has properties, build property conditions
-                prop_conditions = []
-                for key, value in properties.items():
-                    if value and str(value).strip():
-                        prop_conditions.append(
-                            f"{key}: '{self._sanitize_value(value)}'"
-                        )
-
-                if prop_conditions:
-                    return f"({node_id}:{node_type} {{{', '.join(prop_conditions)}}})"
-
-            # No properties or all empty, just match by type
-            return f"({node_id}:{node_type})"
+            return f"({node_id}:{node_type} {{id: '{self._sanitize_value(node['id'])}'}})"
+        properties = node["properties"]
+        if properties and any(v for v in properties.values() if v):
+            prop_conditions = self._build_property_conditions(properties)
+            if prop_conditions:
+                return f"({node_id}:{node_type} {{{', '.join(prop_conditions)}}})"
+        return f"({node_id}:{node_type})"
 
     def _build_where_clause(self, nodes):
         conditions = []

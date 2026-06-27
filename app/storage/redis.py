@@ -91,7 +91,7 @@ class RedisManager:
         try:
             self._redis_client.ping()
             return True
-        except:
+        except Exception:
             return False
 
     def get_socketio_redis_url(self) -> Optional[str]:

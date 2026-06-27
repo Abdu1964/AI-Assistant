@@ -1,23 +1,15 @@
-
 from typing import Dict, Any, Tuple, Optional, List, Union
-from app.prompts.hypothesis_prompt import hypothesis_format_prompt,hypothesis_response
-from app.storage.redis import redis_manager
+from app.prompts.hypothesis_prompt import hypothesis_format_prompt, hypothesis_response
 from app.socket_manager import emit_to_user
 import logging
 import os
 import difflib
 import requests
+import time
 
-
-# Configure logging with more detailed format
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # Load API endpoints from environment variables
-HYPOTHESIS_CHAT_ENDPOINT = os.getenv('HYPOTHESIS_CHAT_ENDPOINT')
 HYPOTHESIS_MAIN_ENDPOINT = os.getenv('HYPOTHESIS_MAIN_ENDPOINT')
 HYPOTHESIS_DATA_API = os.getenv('HYPOTHESIS_DATA_API')
 
@@ -38,26 +30,14 @@ class HypothesisGeneration:
         self.llm = llm
         logger.info("HypothesisGeneration initialized with LLM")
 
-    def _make_api_request(self, 
-                         method: str, 
-                         url: str, 
-                         token: str, 
-                         params: Optional[Dict] = None, 
-                         headers: Optional[Dict] = None,
-                         data:Optional[Dict] = None) -> Dict[str, Any]:
+    def _make_api_request(self,
+                         method: str,
+                         url: str,
+                         token: str,
+                         params: Optional[Dict] = None,
+                         data: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Helper method to make API requests with proper error handling.
-        
-        Args:
-            method: HTTP method (GET, POST)
-            url: API endpoint URL
-            token: Authentication token
-            params: Query parameters
-            headers: Request headers
-            data: Form data for POST requests
-            
-        Returns:
-            Response as dictionary or error message
         """
         headers = {
             "Authorization": f"Bearer {token}"
@@ -65,7 +45,8 @@ class HypothesisGeneration:
         try:
             logger.debug(f"Making {method} request to {url} with data {data} and params {params}")
             if data and method.upper() == "POST":
-                response = requests.post(url, data=data, headers=headers)    
+                # Use json=data to send application/json
+                response = requests.post(url, json=data, headers=headers)    
             elif method.upper() == "GET":
                 response = requests.get(url, params=params, headers=headers)
             elif method.upper() == "POST":
@@ -80,308 +61,479 @@ class HypothesisGeneration:
             logger.error(f"API request failed: {e}")
             return {"error": f"Request failed Please Try Again"}
 
-    def get_enrich_id_genes_GO_terms(self, token: str, hypothesis_id: str, retrieved_keys: Dict[str, Any],user_id) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    def _validate_response(self, response: Dict[str, Any], required_keys: List[str] = []) -> Tuple[bool, str]:
         """
-        Process the hypothesis_id to extract enrichment details using the retrieved_keys.
-        Then query the appropriate endpoint to get graph/summary.
-        
-        Args:
-            token: Authorization token
-            hypothesis_id: The hypothesis ID to query
-            retrieved_keys: Dictionary containing keys like "GO" or "Gene"
-            
-        Returns:
-            Tuple of (summary, graph, go_term_used) or error message
+        Validate API response status and content.
         """
-        logger.info(f"Processing hypothesis ID {hypothesis_id} with retrieved keys: {retrieved_keys}")
+        if "error" in response:
+             return False, response["error"]
         
-        hypothesis_data = self._make_api_request(
-            "GET", 
-            HYPOTHESIS_DATA_API, 
-            token, 
-            params={'id': hypothesis_id}
-        )
-        logger.info(f"Response from {HYPOTHESIS_DATA_API} are {hypothesis_data}")
+        for key in required_keys:
+            if key not in response:
+                return False, f"Missing required key: {key}"
         
-        if "error" in hypothesis_data:
-            logger.error(f"Failed to retrieve hypothesis data: {hypothesis_data['error']}")
-            emit_to_user(user=user_id,message="Failed to retrieve hypothesis data")
-            return hypothesis_data, {}, ""
-        
-        # Extract relevant information
-        enrich_id = hypothesis_data.get("enrich_id")
-        result = hypothesis_data.get("result", {})
-        go_terms = result.get("GO_terms", [])
-        causal_gene = result.get("causal_gene")
-        
-        logger.info(f"Found {len(go_terms)} GO terms for hypothesis ID {hypothesis_id}")
-        
-        # Initialize extracted result dictionary
-        extracted = {"enrich id": enrich_id}
+        return True, ""
 
-        if "Gene" in retrieved_keys or "causal_gene" in retrieved_keys:
-            if causal_gene:
-                extracted["Gene"] = causal_gene
-                logger.debug(f"Extracted causal gene: {causal_gene}")
-                emit_to_user(user=user_id,message=f"Extracted causal gene: {causal_gene}")
+    def _step_1_enrich(self, token: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Step 1: Start Enrichment"""
+        logger.info(f"Step 1: Starting enrichment with params: {params}")
+        url = f"{HYPOTHESIS_DATA_API}/enrich"
+        response = self._make_api_request("POST", url, token, data=params)
+        
+        valid, error = self._validate_response(response, required_keys=["hypothesis_id"])
+        if not valid:
+            return {"error": f"Enrichment start failed: {error}"}
+            
+        return response
+
+    def _step_2_poll(self, token: str, hypothesis_id: str) -> Dict[str, Any]:
+        """Step 2: Polling Loop with Retry Mechanism"""
+        logger.info(f"Step 2: Polling status for hypothesis ID: {hypothesis_id}")
+        
+        # Retry configuration: 6 attempts * 10 seconds = 60 seconds max wait
+        max_retries = 6
+        retry_delay = 10
+
+        url = f"{HYPOTHESIS_MAIN_ENDPOINT}/hypothesis"
+        
+        for attempt in range(max_retries):
+        
+         
+            response = self._make_api_request("GET", url, token, params={"id": hypothesis_id})
+            
+            valid, error = self._validate_response(response, required_keys=["status"])
+            if not valid:
+                 return {"error": f"Status check failed: {error}"}
+            
+            status = response.get("status")
+            logger.info(f"Polling attempt {attempt + 1}/{max_retries}: Status is '{status}'")
+
+            if status == "completed":
+                if "enrich_id" not in response:
+                     return {"error": "Completed status but missing enrich_id"}
+                return response
+            elif status == "pending":
+                if attempt < max_retries - 1:
+                    logger.info(f"Status is pending. Waiting {retry_delay} seconds before retrying...")
+                    time.sleep(retry_delay)
+                else:
+                    return {"error": "Enrichment timed out after maximum retries"}
             else:
-                logger.debug("No causal gene found in hypothesis data")
-                emit_to_user(user=user_id,message="No causal gene found in hypothesis data")
+                return {"error": f"Unknown status: {status}"}
+                
+        return {"error": "Enrichment timed out"}
+
+    def _step_3_get_results(self, token: str, enrich_id: str) -> Dict[str, Any]:
+        """Step 3: Get Enrichment Results"""
+        logger.info(f"Step 3: Fetching results for enrich ID: {enrich_id}")
+        url = f"{HYPOTHESIS_DATA_API}/enrich"
+        response = self._make_api_request("GET", url, token, params={"id": enrich_id})
         
-        go_term_name = retrieved_keys.get("GO")
-        selected_go_term = None
-        
-        if go_term_name and go_terms:
-            go_names = [go["name"] for go in go_terms]
-            closest_matches = difflib.get_close_matches(go_term_name, go_names, n=1, cutoff=0.6)
+        valid, error = self._validate_response(response, required_keys=["GO_terms", "causal_gene"])
+        if not valid:
+            return {"error": f"Result fetch failed: {error}"}
             
-            if closest_matches:
-                match = closest_matches[0]
-                selected_go_term = next((go for go in go_terms if go["name"] == match), None)
-                logger.info(f"Matched GO term '{go_term_name}' to '{match}'")
-                emit_to_user(user=user_id,message=f"Matched GO term '{go_term_name}' to '{match}'")
-        
-        if not selected_go_term and go_terms:
-            selected_go_term = go_terms[0]
-            logger.info(f"No matching GO term found, defaulting to: {selected_go_term['name']}")
-            emit_to_user(user=user_id,message=f"Using default GO term: {selected_go_term['name']}")
-        
-        if not selected_go_term:
-            logger.warning("No valid GO term found for hypothesis")
-            emit_to_user(user=user_id,message="No valid GO term found for hypothesis")
-            return {"error": "No valid GO term found."}, {}, ""
-        
-        # Store selected GO term information
-        extracted["GO"] = selected_go_term["name"]
-        go_id = selected_go_term["id"]
-        extracted["GO_id"] = go_id
-        go_term_used = selected_go_term["name"]  # Store the GO term name for return
+        return response
 
-        logger.info(f"Fetching summary for enrich id {enrich_id} with GO ID {go_id}")
-        summary_response = self._make_api_request(
-            "POST", 
-            HYPOTHESIS_DATA_API, 
-            token, 
-            params={"id": enrich_id, 
-                    "go": go_id}
-            )
-        if "error" not in summary_response:
-            logger.info(f"Successfully retrieved graph and summary {summary_response}")
-            redis_manager.create_graph(graph_id=hypothesis_id,graph_summary=summary_response["summary"])
-            logger.info(f"Caching for graph_id {hypothesis_id}")
-            return summary_response["summary"], summary_response["graph"], go_term_used
-        else:
-            logger.error("Failed to fetch graph and summary")
-            emit_to_user(user=user_id,message="Failed to fetch detailed analysis")
-            return {"error": "Failed to fetch graph and summary"}, {}, ""
+    def _step_4_generate(self, token: str, enrich_id: str, go_term_id: str) -> Dict[str, Any]:
+        """Step 4: Generate Final Hypothesis"""
+        logger.info(f"Step 4: Generating hypothesis for enrich ID: {enrich_id} and GO: {go_term_id}")
+        url = f"{HYPOTHESIS_MAIN_ENDPOINT}/hypothesis"
+        response = self._make_api_request("POST", url, token, data={"id": enrich_id, "go": go_term_id})
+        
+        valid, error = self._validate_response(response, required_keys=["summary", "graph"])
+        if not valid:
+            return {"error": f"Final generation failed: {error}"}
+            
+        return response
 
-    def get_by_hypothesis_id(self, token: str, hypothesis_id: str,user_id,query=None,) -> Dict[str, Any]:
+
+    def get_by_hypothesis_id(self, token: str, hypothesis_id: str, user_id, query=None) -> Dict[str, Any]:
         """
         Retrieve hypothesis information by ID.
-        
-        Args:
-            token: Authorization token
-            query: User query
-            hypothesis_id: Hypothesis ID to retrieve
-            
-        Returns:
-            Dictionary containing hypothesis text or error message
         """
         logger.info(f"Retrieving hypothesis by ID: {hypothesis_id}")
-        emit_to_user(user=user_id,message=f"Retrieving hypothesis by ID: {hypothesis_id}")
-        
-        try:   
-            if query: 
-                emit_to_user(user=user_id,message=f"Processing query with existing hypothesis...")
-                data = {
-                    "query": query,
-                    "hypothesis_id": hypothesis_id}
-                headers = {
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/x-www-form-urlencoded"
-                    }
-                response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, data=data, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                emit_to_user(user=user_id,message="Successfully processed query with hypothesis")
-                return data
-            else:
-                cached_graph = redis_manager.get_graph_by_id(hypothesis_id)
-                if cached_graph and cached_graph.get("graph_summary"):
-                    logger.info(f"Cache hit for graph_id={hypothesis_id} {cached_graph}")
-                    return {"text": cached_graph["graph_summary"]}
+        logger.info(f"Token: {token}")
+        emit_to_user(user=user_id, message=f"Retrieving hypothesis by ID: {hypothesis_id}")
 
-                data = {
-                    "hypothesis_id": hypothesis_id
-                }
+        try:
+            headers = {"Authorization": f"Bearer {token}"}
+            response = requests.get(HYPOTHESIS_MAIN_ENDPOINT, params={"id": hypothesis_id}, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Hypothesis GET response status: {data.get('status')}")
 
-                headers = {
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/x-www-form-urlencoded"
+            summary = data.get("summary", "")
+            graph = data.get("graph", {})
+            result = data.get("result", {})
+
+            if not summary and not graph:
+                logger.warning(f"Hypothesis {hypothesis_id} returned no data")
+                return {"text": "NO summaries provided"}
+
+            context_parts = []
+
+            if summary:
+                context_parts.append(f"Summary:\n{summary}")
+
+            meta = (
+                f"Variant: {data.get('variant', 'N/A')} | "
+                f"Phenotype: {data.get('phenotype', 'N/A')} | "
+                f"Status: {data.get('status', 'N/A')}"
+            )
+            context_parts.append(f"Hypothesis Metadata:\n{meta}")
+
+            nodes = graph.get("nodes", [])
+            if nodes:
+                node_lines = [f"  - {n.get('name', n.get('id'))} (type: {n.get('type')})" for n in nodes]
+                context_parts.append("Graph Nodes:\n" + "\n".join(node_lines))
+
+            edges = graph.get("edges", [])
+            if edges:
+                edge_lines = [f"  - {e.get('source')} --[{e.get('label')}]--> {e.get('target')}" for e in edges]
+                context_parts.append("Graph Relationships:\n" + "\n".join(edge_lines))
+
+            go_terms = result.get("GO_terms", [])
+            if go_terms:
+                go_lines = [
+                    f"  - {g.get('name')} (p={g.get('p', 'N/A'):.4f}, genes: {', '.join(g.get('genes', []))})"
+                    for g in go_terms[:5]
+                ]
+                context_parts.append("Top GO Terms:\n" + "\n".join(go_lines))
+
+            full_context = "\n\n".join(context_parts)
+            logger.info(f"Built hypothesis context with {len(nodes)} nodes, {len(edges)} edges, {len(go_terms)} GO terms")
+
+            return {
+                "text": full_context,
+                "resource": {
+                    "id": hypothesis_id,
+                    "type": "hypothesis",
+                    "graph": graph,
                 }
-                try:
-                    response = requests.post(HYPOTHESIS_CHAT_ENDPOINT, data=data, headers=headers)
-                    response.raise_for_status()
-                    data = response.json()
-                    redis_manager.create_graph(graph_id=data['hypothesis_id'], graph_summary=data['summary'])
-                    logger.info(f"Cached generated graph for graph id {data['resource']['id']}")
-                    return data
-                except Exception as e:
-                    logger.error(f"Failed to retrieve hypothesis by ID: {response}")
-                    emit_to_user(user=user_id,message=f"Failed to retrieve hypothesis")
-                    return "NO summaries provided"
+            }
         except Exception as e:
-            emit_to_user(user=user_id,message="Error retrieving hypothesis")
-            return None
+            logger.error(f"Failed to retrieve hypothesis by ID {hypothesis_id}: {e}")
+            emit_to_user(user=user_id, message="Error retrieving hypothesis")
+            return {"text": "NO summaries provided"}
 
-    def format_user_query(self, query: str,user_id) -> Dict[str, Any]:
+    def format_user_query(self, query: str, user_id) -> Dict[str, Any]:
         """
         Format user query using the LLM to extract relevant parameters.
-        
-        Args:
-            query: Raw user query
-            
-        Returns:
-            Formatted query parameters
         """
         logger.info(f"Formatting user query: {query}")
-        
+
         try:
             prompt = hypothesis_format_prompt.format(question=query)
             response = self.llm.generate(prompt)
-            
+
             if not response:
                 logger.warning("LLM returned empty response for query formatting")
-                emit_to_user(user=user_id,message="Warning: Empty response from query formatting")
-            else:
-                logger.info(f"Successfully formatted query with {len(response)} parameters")
-                
+                emit_to_user(user=user_id, message="Warning: Empty response from query formatting")
+                return {}
+
+            # Guard: ensure the LLM returned a dict, not a raw string
+            if isinstance(response, str):
+                logger.warning(f"LLM returned a string instead of a dict: {response}")
+                emit_to_user(user=user_id, message="Warning: Could not parse extraction response")
+                return {}
+
+            logger.info(f"Successfully formatted query with {len(response)} parameters")
+
+            # POST-PROCESSING VALIDATION: Override LLM if it hallucinated the variant
+            import re
+            regex_variants = re.findall(r'\brs\d+\b', query, re.IGNORECASE)
+
+            if regex_variants:
+                user_variant = regex_variants[0]
+                llm_variant = response.get("variant")
+
+                if llm_variant and llm_variant.lower() != user_variant.lower():
+                    logger.warning(
+                        f"LLM hallucination detected! User said '{user_variant}' but LLM extracted "
+                        f"'{llm_variant}'. Overriding."
+                    )
+                    response["variant"] = user_variant
+                    emit_to_user(user=user_id, message=f"Corrected variant extraction to {user_variant}")
+                elif not llm_variant:
+                    logger.warning(f"LLM missed variant. Found '{user_variant}' via regex.")
+                    response["variant"] = user_variant
+
             return response
+
         except Exception as e:
             logger.error(f"Error formatting user query: {str(e)}")
-            emit_to_user(user=user_id,message=f"Error formatting query")
+            emit_to_user(user=user_id, message="Error formatting query")
             return {}
 
-    def get_hypothesis(self, token: str, user_query: str,user_id) -> Union[Tuple[str, Dict[str, Any]], Dict[str, str]]:
+    def get_user_projects(self, token: str) -> List[Dict[str, Any]]:
         """
-        Generate a hypothesis based on the user query.
-        
-        Args:
-            token: Authorization token
-            user_query: User's query string
-            
-        Returns:
-            Tuple of (hypothesis_id, retrieved_keys) or error message dictionary
+        Fetch the list of projects available to the user.
         """
-        logger.info(f"Generating hypothesis for query: {user_query}")
-        
-        refactored_query = self.format_user_query(user_query,user_id)
-        
-        if not refactored_query:
-            logger.warning("Failed to format user query")
-            emit_to_user(user=user_id,message="Failed to format user query")
-            return {"text": "Sorry I can't help with your question. Please try again elaborating it."}
-            
+        url = f"{HYPOTHESIS_DATA_API}/projects"
         try:
-            # Separate payload parameters from retrieval keys
-            payload = {}
-            retrieved_keys = {}
-            
-            for key, value in refactored_query.items():
-                if key in {"variant", "phenotype"}:
-                    payload[key] = value
-                else:
-                    retrieved_keys[key] = value
-                    
-            logger.info(f"Sending request to endpoint {HYPOTHESIS_MAIN_ENDPOINT} Hypothesis request parameters: {payload}")
-            
-            # Make request to generate hypothesis
-            response = self._make_api_request(
-                "POST",
-                HYPOTHESIS_MAIN_ENDPOINT,
-                token,
-                params=payload
-            )
-            
-            logger.info(f"Response from {HYPOTHESIS_MAIN_ENDPOINT} endpoint are {response}")
-            if "error" in response:
-                logger.error(f"Failed to generate hypothesis: {response['error']}")
-                emit_to_user(user=user_id,message=f"Failed to generate hypothesis")
-                return {"text": f"Sorry couldn't generate hypothesis for the given question {user_query}"}
-                
-            hypothesis_id = response.get("hypothesis_id")
-            
-            if not hypothesis_id:
-                logger.error("No hypothesis ID returned from API")
-                emit_to_user(user=user_id,message="No hypothesis ID returned from API")
-                return {"text": "Failed to generate hypothesis - no ID returned"}
-                
-            logger.info(f"Successfully generated hypothesis with ID: {hypothesis_id}")
-            return hypothesis_id, retrieved_keys
-            
+            response = self._make_api_request("GET", url, token)
+            valid, error = self._validate_response(response, required_keys=["projects"])
+            if not valid:
+                logger.error(f"Failed to fetch projects: {error}")
+                return []
+            return response["projects"]
         except Exception as e:
-            logger.error(f"Error generating hypothesis: {str(e)}")
-            emit_to_user(user=user_id,message=f"Error generating hypothesis")
-            import traceback
-            logger.error(traceback.format_exc())
-            return {"text": f"Sorry couldn't generate hypothesis for the given question {user_query}"}
+            logger.error(f"Error fetching user projects: {e}")
+            return []
 
-    def generate_hypothesis(self, token: str, user_query: str,user_id:str) -> Dict[str, Any]:
+    @staticmethod
+    def _normalize_field(s: str) -> str:
+        normalized = s.lower().strip().replace(" ", "_").replace("-", "_")
+        normalized = normalized.replace("_tissue", "").replace("_cell", "").replace("_cells", "")
+        return normalized
+
+    def _match_project_fields(self, token: str, project: Dict[str, Any], variant: str, tissue: str):
+        """Fetch project details and return (has_variant, has_tissue, project_variants, project_tissues)."""
+        project_id = project.get("id")
+        url = f"{HYPOTHESIS_DATA_API}/projects"
+        details = self._make_api_request("GET", url, token, params={"id": project_id})
+        if "error" in details:
+            return False, False, [], []
+
+        project_variants = [h.get("variant") for h in details.get("hypotheses", [])]
+        project_tissues = [t.get("name") for t in details.get("ldsc", {}).get("tissues", [])]
+
+        norm_variant = self._normalize_field(variant)
+        norm_tissue = self._normalize_field(tissue)
+        has_variant = any(norm_variant == self._normalize_field(v) for v in project_variants)
+        has_tissue = any(norm_tissue == self._normalize_field(t) for t in project_tissues)
+        return has_variant, has_tissue, project_variants, project_tissues
+
+    def _collect_all_variants(self, token: str, projects: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Collect all available variants across all projects."""
+        all_variants = []
+        for project in projects:
+            project_id = project.get("id")
+            project_name = project.get("name")
+            url = f"{HYPOTHESIS_DATA_API}/projects"
+            details = self._make_api_request("GET", url, token, params={"id": project_id})
+            if "error" not in details:
+                for h in details.get("hypotheses", []):
+                    all_variants.append({"variant": h.get("variant"), "project_name": project_name})
+        return all_variants
+
+    def validate_project_context(self, token: str, variant: str, tissue: str) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
-        Main method to generate a hypothesis response based on user query.
-        
-        Args:
-            token: Authorization token
-            user_query: User's query
-            
+        Phase 3 Validation: Check if the variant and tissue exist in the same project.
+
         Returns:
-            Formatted hypothesis response with resource information
+            Tuple[Optional[str], Optional[Dict]]:
+                - First element: project_id if found, else None
+                - Second element: Error details if validation failed, else None
         """
-        logger.info(f"Processing complete hypothesis generation for: {user_query}")
-        emit_to_user(user=user_id,message="Starting hypothesis generation process...")
-        
-        result = self.get_hypothesis(token, user_query,user_id)
+        logger.info(f"Validating project context for Variant: {variant}, Tissue: {tissue}")
 
-        # Check if we got an error instead of a tuple
-        if isinstance(result, dict) and "text" in result:
-            logger.warning(f"Failed to get hypothesis: {result['text']}")
-            emit_to_user(user=user_id, message="Failed to get hypothesis")
-            return result
+        projects = self.get_user_projects(token)
 
-        hypothesis_id, retrieved_keys = result
-        cached_graph = redis_manager.get_graph_by_id(hypothesis_id)
-        logger.info(f"Cached data is :{cached_graph}")
-        if cached_graph and cached_graph.get("graph_summary"):
-            logger.info(f"Cache hit for graph_id={hypothesis_id} {cached_graph}")
-            return {"text": cached_graph["graph_summary"],"resource":{"id":hypothesis_id, "type":"hypothesis"}}
+        # Scenario 1: No projects exist
+        if not projects:
+            logger.warning("No projects found for user.")
+            return None, {
+                "error_type": "no_projects",
+                "variant": variant,
+                "tissue": tissue
+            }
 
-        enriched_data, graph, go_term_used = self.get_enrich_id_genes_GO_terms(token, hypothesis_id, retrieved_keys,user_id)
-        
-        if "error" in enriched_data:
-            logger.error(f"Failed to enrich hypothesis data: {enriched_data['error']}")
-            emit_to_user(user=user_id, message="Failed to enrich hypothesis data")
-            return {"text": f"Please Try again. No hypothesis is found"}
-        
-        # Generate final response
-        logger.info("Generating final hypothesis response")
-        logger.info(f"Using GO term: {go_term_used}")
-        
-        # Updated prompt to include the GO term used
-        prompt = hypothesis_response.format(
-            response=enriched_data,
-            user_query=user_query, 
-            graph=graph,
-            go_term_used=go_term_used
-        )
+        # Track which projects contain each component
+        variant_found_in = []  # List of {project_id, project_name, variants, tissues}
+        tissue_found_in = []   # List of {project_id, project_name, variants, tissues}
+        searched_project_names = [] # Names of all projects searched
 
-        response_text = self.llm.generate(prompt)
-        redis_manager.create_graph(graph_id=hypothesis_id, graph_summary=response_text)
+        for project in projects:
+            project_id = project.get("id")
+            project_name = project.get("name")
+            searched_project_names.append(project_name)
 
-        # Return in the new format with resource information
+            has_variant, has_tissue, project_variants, project_tissues = self._match_project_fields(
+                token, project, variant, tissue
+            )
+            if not project_variants and not project_tissues:
+                continue
+
+            norm_variant = self._normalize_field(variant)
+            norm_tissue = self._normalize_field(tissue)
+
+            # Track findings
+            if has_variant:
+                # Find the actual variant name from the project for consistent suggesting
+                actual_v = next((v for v in project_variants if self._normalize_field(v) == norm_variant), variant)
+                variant_found_in.append({
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "actual_variant": actual_v,
+                    "tissues": project_tissues
+                })
+
+            if has_tissue:
+                # Find the actual tissue name from the project
+                actual_t = next((t for t in project_tissues if self._normalize_field(t) == norm_tissue), tissue)
+                tissue_found_in.append({
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "actual_tissue": actual_t,
+                    "variants": project_variants
+                })
+
+            # Success case: Both found in same project
+            if has_variant and has_tissue:
+                logger.info(f"Validation Successful: Found matched context in project {project_id}")
+                return project_id, None
+
+        # If we reach here, validation failed. Determine the specific error type.
+        logger.warning("Validation Failed: No single project contains both variant and tissue.")
+
+        # Scenario 2: Variant not found anywhere
+        if len(variant_found_in) == 0:
+            all_variants = self._collect_all_variants(token, projects)
+            return None, {
+                "error_type": "variant_not_found",
+                "variant": variant,
+                "tissue": tissue,
+                "all_variants": all_variants,
+                "searched_projects": searched_project_names
+            }
+
+        # Scenario 3: Mismatch (variant and tissue exist, but in different projects)
+        return None, {
+            "error_type": "mismatch",
+            "variant": variant,
+            "tissue": tissue,
+            "variant_projects": variant_found_in,
+            "tissue_projects": tissue_found_in
+        }
+
+    def _format_validation_error(self, error_details: Dict[str, Any]) -> Dict[str, Any]:
+        """Format a validation error dict into a user-facing text response."""
+        error_type = error_details.get("error_type")
+        variant = error_details.get("variant")
+        tissue = error_details.get("tissue")
+
+        if error_type == "no_projects":
+            return {"text": "Since there's no project created yet, you can use the platform UI to generate a new hypothesis. In the meantime, I can still assist you based on the hypotheses you've already generated."}
+
+        if error_type == "variant_not_found":
+            searched_projects = ", ".join(error_details.get("searched_projects", []))
+            all_variants = error_details.get("all_variants", [])
+            variant_list = "\n".join([f"- {v['variant']} ({v['project_name']})" for v in all_variants])
+            return {"text": (
+                f"No hypothesis is generated: I searched your projects ({searched_projects if searched_projects else 'none'}), "
+                f"but variant **{variant}** was not found.\n\n"
+                f"**Available variants:**\n{variant_list if variant_list else '(none)'}"
+            )}
+
+        if error_type == "mismatch":
+            variant_projects = error_details.get("variant_projects", [])
+            tissue_projects = error_details.get("tissue_projects", [])
+            variant_project_name = variant_projects[0]["project_name"] if variant_projects else "Unknown"
+            tissue_project_name = tissue_projects[0]["project_name"] if tissue_projects else "Unknown"
+            available_tissues = variant_projects[0]["tissues"] if variant_projects else []
+            tissue_list = "\n".join([f"- {t}" for t in available_tissues])
+            return {"text": (
+                f"No hypothesis is generated: **{variant}** is in {variant_project_name}, but **{tissue}** is in {tissue_project_name}.\n"
+                f"They must be in the same project.\n\n"
+                f"For **{variant}**, use these tissues:\n{tissue_list if tissue_list else '(none)'}"
+            )}
+
+        # Fallback (should not reach here)
+        return {"text": f"No hypothesis is generated: I couldn't find a project containing both **{variant}** and **{tissue}**."}
+
+    def _run_enrichment_pipeline(self, token: str, params: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+        """Run enrichment steps 1–4 and return the final hypothesis result or an error dict."""
+        # Step 1: Start Enrichment
+        emit_to_user(user=user_id, message=f"Starting enrichment for {params.get('variant')}...")
+        step1_res = self._step_1_enrich(token, params)
+        if "error" in step1_res:
+            logger.error(step1_res["error"])
+            return {"text": f"I tried to start the enrichment, but failed: {step1_res['error']}"}
+
+        hypothesis_id = step1_res["hypothesis_id"]
+
+        # Step 2: Polling
+        emit_to_user(user=user_id, message="Waiting for analysis to complete...")
+        step2_res = self._step_2_poll(token, hypothesis_id)
+        if "error" in step2_res:
+            logger.error(step2_res["error"])
+            return {"text": f"Enrichment started (ID: {hypothesis_id}), but failed during processing: {step2_res['error']}"}
+
+        enrich_id = step2_res["enrich_id"]
+
+        # Step 3: Get Results
+        emit_to_user(user=user_id, message="Fetching enrichment results...")
+        step3_res = self._step_3_get_results(token, enrich_id)
+        if "error" in step3_res:
+            logger.error(step3_res["error"])
+            return {"text": f"Analysis completed, but failed to retrieve results: {step3_res['error']}"}
+
+        # Select best GO term (Logic: Top Rank / Lowest P-value)
+        go_terms = step3_res.get("GO_terms", [])
+        if not go_terms:
+            return {"text": "Analysis completed, but no significant GO terms were found."}
+
+        best_go = go_terms[0]
+        best_go_id = best_go["id"]
+        best_go_name = best_go["name"]
+
+        emit_to_user(user=user_id, message=f"Identified top mechanism: {best_go_name}")
+
+        # Step 4: Final Generation
+        emit_to_user(user=user_id, message="Generating final hypothesis...")
+        step4_res = self._step_4_generate(token, enrich_id, best_go_id)
+        if "error" in step4_res:
+            logger.error(step4_res["error"])
+            return {"text": f"Failed to generate final hypothesis summary: {step4_res['error']}"}
+
+        summary = step4_res["summary"]
+        graph = step4_res["graph"]
+
         return {
-            "text": response_text,
+            "text": summary,
             "resource": {
                 "id": hypothesis_id,
-                "type": "hypothesis"
+                "type": "hypothesis",
+                "graph": graph # pass graph data if needed by frontend
             }
         }
+
+    def generate_hypothesis(self, token: str, user_query: str, user_id: str) -> Dict[str, Any]:
+        """
+        Orchestrates the NLP-driven hypothesis generation workflow.
+        """
+        logger.info(f"Starting NLP-driven hypothesis generation for: {user_query}")
+        emit_to_user(user=user_id, message="Analyzing your query...")
+
+        # 1. NLP Extraction
+        params = self.format_user_query(user_query, user_id)
+        if not params:
+            return {"text": "Could not understand the biological parameters in your query."}
+
+        # Ensure we have the minimum required fields
+        if "variant" not in params or "tissue_name" not in params:
+             # Fallback or ask for clarification? For now, error.
+             pass
+
+        # Log the extracted parameters so they are visible in the Docker logs
+        logger.info(
+            f"Extracted parameters: variant='{params.get('variant')}', "
+            f"tissue='{params.get('tissue_name')}'"
+        )
+
+        # Validate Project Context (Phase 3)
+        validated_project_id, error_details = self.validate_project_context(token, params["variant"], params["tissue_name"])
+
+        if validated_project_id:
+             params["project_id"] = validated_project_id
+             logger.info(f"Project context valid ation successful. Using project ID: {validated_project_id}")
+             # Add project info to user message
+             emit_to_user(user=user_id, message=f"Found related project: {validated_project_id}")
+        else:
+             # Validation failed - format specific error message based on error type
+             logger.warning(f"Project validation failed for {params['variant']} in {params['tissue_name']}")
+             return self._format_validation_error(error_details)
+
+        return self._run_enrichment_pipeline(token, params, user_id)

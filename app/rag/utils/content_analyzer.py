@@ -40,7 +40,7 @@ class ContentAnalyzer:
 
     def _parse_list(self, response):
         text = response.strip()
-        numbered = re.findall(r"(?:^\d+\.\s*|\n\d+\.\s*)([^\n]+)", text)
+        numbered = re.findall(r"(?:^|\n)\d+\.\s*([^\n]+)", text)
         if len(numbered) >= 2:
             items = [item.strip() for item in numbered if item.strip()]
         else:

@@ -9,6 +9,7 @@ logging.getLogger("pymongo").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+
 class MongoManager:
     """Unified MongoDB manager for user information, content files, and history."""
     
@@ -17,6 +18,8 @@ class MongoManager:
         self.db = None
         self.user_info_collection = None
         self.content_files_collection = None
+        self.faq_collection = None
+        self.hypothesis_collection = None
         self._connect()
         self._create_indexes()
 
@@ -30,6 +33,8 @@ class MongoManager:
             self.db = self.client[database_name]
             self.user_info_collection = self.db["user_information"]
             self.content_files_collection = self.db["user_content_files"]
+            self.faq_collection = self.db["faq_questions"]
+            self.hypothesis_collection = self.db["hypothesis_requests"]
 
             logger.info(f"MongoDB connection established to {database_name}")
         except Exception as e:
@@ -50,6 +55,14 @@ class MongoManager:
             self.content_files_collection.create_index("content_type")
             self.content_files_collection.create_index("upload_time")
 
+            # FAQ indexes
+            self.faq_collection.create_index("question_id", unique=True)
+            self.faq_collection.create_index("display_order")
+
+            # Hypothesis indexes
+            self.hypothesis_collection.create_index("id", unique=True)
+            self.hypothesis_collection.create_index("status")
+
             logger.info("MongoDB indexes created successfully")
         except Exception as e:
             logger.error(f"Error creating MongoDB indexes: {e}")
@@ -57,15 +70,15 @@ class MongoManager:
     # ==================== CONVERSATION HISTORY METHODS ====================
     
     def create_history(
-        self, 
-        user_id: str, 
-        user_message: str, 
-        assistant_answer: str, 
+        self,
+        user_id: str,
+        user_message: str,
+        assistant_answer: str,
         graph_id_referenced: str = None,
         content_ids: list = None,
         urls: list = None,
         agents_used: list = None,
-
+        pending_json: dict = None,
     ):
         """
         Create a conversation history entry with both question and answer.
@@ -84,6 +97,7 @@ class MongoManager:
                 "content_ids":content_ids,
                 "urls":urls,
                 "agents_used": agents_used,
+                "pending_json": pending_json,
                 "memory": None,
                 "context": None,
                 "time": datetime.utcnow(),
@@ -91,7 +105,7 @@ class MongoManager:
                 "updated_at": datetime.utcnow(),
             }
 
-            result = self.user_info_collection.insert_one(user_info)
+            self.user_info_collection.insert_one(user_info)
             logger.info(f"Created history with question_id: {user_info['question_id']}")
             
             return user_info.get("question_id")
@@ -177,56 +191,56 @@ class MongoManager:
         except Exception as e:
             logger.error(f"Error cleaning old user records: {e}")
 
+    def get_latest_pending_json(self, user_id: str):
+        """Return pending_json from the most recent history entry if it has one, else None."""
+        try:
+            latest = self.user_info_collection.find_one(
+                {"user_id": user_id},
+                sort=[("time", -1)]
+            )
+            if latest and latest.get("pending_json"):
+                return latest["pending_json"]
+            return None
+        except Exception as e:
+            logger.error(f"Error getting latest pending JSON: {e}")
+            return None
+
+    def _parse_memory_record(self, record):
+        memory = None
+        if record.get("memory"):
+            try:
+                memory_data = json.loads(record["memory"])
+                if "content" in memory_data:
+                    content = memory_data["content"]
+                    memory = json.loads(content) if isinstance(content, str) else content
+                else:
+                    memory = memory_data
+            except (json.JSONDecodeError, TypeError):
+                memory = None
+        if memory in [None, []]:
+            memory = ""
+        return memory
+
     def get_context_and_memory(self, user_id: str):
-        """
-        Get context and memory for a user (used for conversation context).
-        Returns recent conversation history in a specific format.
-        """
         try:
             cursor = (
                 self.user_info_collection.find({"user_id": user_id})
-                .sort("time", 1)
-                .limit(10)
+                .sort("time", -1)
+                .limit(3)
             )
             records = list(cursor)
+            records.reverse()
+
             result = []
-
             for record in records:
-                question = record.get("user_question", "")
-                
-                # Parse context if exists
-                context = None
-                if record.get("context"):
-                    try:
-                        context_data = json.loads(record["context"])
-                        if "content" in context_data:
-                            content = context_data["content"]
-                            context = json.loads(content) if isinstance(content, str) else content
-                        else:
-                            context = context_data
-                    except (json.JSONDecodeError, TypeError):
-                        context = None
-
-                # Parse memory if exists
-                memory = None
-                if record.get("memory"):
-                    try:
-                        memory_data = json.loads(record["memory"])
-                        if "content" in memory_data:
-                            content = memory_data["content"]
-                            memory = json.loads(content) if isinstance(content, str) else content
-                        else:
-                            memory = memory_data
-                    except (json.JSONDecodeError, TypeError):
-                        memory = None
-
-                # Default to empty string if no memory
-                if memory in [None, []]:
-                    memory = ""
-
+                memory = self._parse_memory_record(record)
                 result.append({
-                    "QUESTION": {"question": question, "context": context},
-                    "MEMORIES": memory,
+                    "question": record.get("user_question", ""),
+                    "context": {
+                        "answer": record.get("assistant_answer", ""),
+                        "agents_used": record.get("agents_used", []),
+                        "memory": memory,
+                    },
                 })
 
             return result
@@ -234,9 +248,6 @@ class MongoManager:
         except Exception as e:
             logger.error(f"Error getting context and memory: {e}")
             return []
-
-    # ==================== CONTENT FILE METHODS ====================
-
     def add_content_file(
         self,
         user_id: str,
@@ -247,16 +258,15 @@ class MongoManager:
         url: str = None,
         title: str = None,
         author: str = None,
-        publish_date: datetime = None,
-        file_size: float = None,
         upload_time: datetime = None,
         summary: str = None,
         keywords: str = None,
         topics: str = None,
-        suggested_questions: str = None,
+        metadata: dict = None,
     ):
         """Add a content file record"""
         try:
+            meta = metadata or {}
             content_file = {
                 "user_id": user_id,
                 "content_id": content_id,
@@ -266,13 +276,13 @@ class MongoManager:
                 "url": url,
                 "title": title,
                 "author": author,
-                "publish_date": publish_date,
-                "file_size": file_size,
+                "publish_date": meta.get("publish_date"),
+                "file_size": meta.get("file_size"),
                 "upload_time": upload_time or datetime.utcnow(),
                 "summary": summary,
                 "keywords": keywords,
                 "topics": topics,
-                "suggested_questions": suggested_questions,
+                "suggested_questions": meta.get("suggested_questions"),
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow(),
             }
@@ -369,6 +379,97 @@ class MongoManager:
 
         except Exception as e:
             logger.error(f"Error deleting content file: {e}")
+            return False
+
+
+    # ==================== FAQ METHODS ====================
+
+    def get_all_faq_questions(self, context=None):
+        """Get all FAQ questions ordered by display_order"""
+        try:
+            query = {"context":context}
+            cursor = self.faq_collection.find(query).sort("display_order", 1)
+            return list(cursor)
+        except Exception as e:
+            logger.error(f"Error retrieving FAQ questions: {e}")
+            return []
+
+    def get_faq_by_id(self, question_id: str):
+        """Get a specific FAQ question and answer"""
+        try:
+            return self.faq_collection.find_one({"question_id": question_id})
+        except Exception as e:
+            logger.error(f"Error retrieving FAQ by ID: {e}")
+            return None
+
+    def seed_faq_questions(self, questions: list):
+        """
+        Sync FAQ questions from JSON to MongoDB.
+        - Adds new questions
+        - Updates existing questions (if content changed)
+        - Removes questions not present in the input list
+        """
+        try:
+            # 1. Get all current question IDs from the input list
+            input_ids = [q["question_id"] for q in questions]
+            
+            # 2. Update or Insert (Upsert) each question from the input
+            for q in questions:
+                self.faq_collection.replace_one(
+                    {"question_id": q["question_id"]},
+                    q,
+                    upsert=True
+                )
+            
+            # 3. Delete questions that are in DB but NOT in the input list
+            result = self.faq_collection.delete_many(
+                {"question_id": {"$nin": input_ids}}
+            )
+            
+            logger.info(f"FAQ Sync Complete: Seeded/Updated {len(questions)} questions. Removed {result.deleted_count} old questions.")
+            
+        except Exception as e:
+            logger.error(f"Error seeding FAQ questions: {e}")
+
+
+    # ==================== HYPOTHESIS METHODS ====================
+
+    # Note: The methods below are currently "Dead Code" and not used by the AI Assistant.
+    # They were designed for local job tracking in MongoDB, but the current implementation 
+    # uses a direct API flow with the hypothesis server.
+
+    def create_hypothesis_request(self, data: dict):
+        """Create a new hypothesis request"""
+        try:
+            self.hypothesis_collection.insert_one(data)
+            logger.info(f"Created hypothesis request: {data.get('id')}")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating hypothesis request: {e}")
+            raise
+
+    def get_hypothesis_request(self, hypothesis_id: str):
+        """Get a hypothesis request by ID"""
+        try:
+            return self.hypothesis_collection.find_one({"id": hypothesis_id})
+        except Exception as e:
+            logger.error(f"Error retrieving hypothesis request: {e}")
+            return None
+
+    def update_hypothesis_status(self, hypothesis_id: str, status: str, enrich_id: str = None):
+        """Update the status and enrich_id of a hypothesis request"""
+        try:
+            update_data = {"status": status}
+            if enrich_id:
+                update_data["enrich_id"] = enrich_id
+            
+            result = self.hypothesis_collection.update_one(
+                {"id": hypothesis_id},
+                {"$set": update_data}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Error updating hypothesis status: {e}")
             return False
 
 
