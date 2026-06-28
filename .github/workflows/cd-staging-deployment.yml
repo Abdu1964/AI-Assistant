@@ -74,6 +74,10 @@ jobs:
           LOCAL_MODEL_HOST=${{ secrets.LOCAL_MODEL_HOST }}
           LOCAL_MODEL_API_KEY=${{ secrets.LOCAL_MODEL_API_KEY }}
 
+          # === Hypothesis Service ===
+          HYPOTHESIS_MAIN_ENDPOINT=${{ secrets.HYPOTHESIS_MAIN_ENDPOINT }}
+          HYPOTHESIS_DATA_API=${{ secrets.HYPOTHESIS_DATA_API }}
+
           # === Docker Images ===
           ai_assistant_staging=rejuvebio/ai-assistant:staging
           EOF
