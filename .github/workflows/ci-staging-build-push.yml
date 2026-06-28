@@ -330,6 +330,9 @@ jobs:
         echo "LOCAL_MODEL_HOST=${{ secrets.LOCAL_MODEL_HOST || 'http://localhost:8002' }}" >> .env
         echo "LOCAL_MODEL_API_KEY=${{ secrets.LOCAL_MODEL_API_KEY || 'test' }}" >> .env
 
+        echo "HYPOTHESIS_MAIN_ENDPOINT=${{ secrets.HYPOTHESIS_MAIN_ENDPOINT || 'https://dev.rejuve.bio:5051/hypothesis' }}" >> .env
+        echo "HYPOTHESIS_DATA_API=${{ secrets.HYPOTHESIS_DATA_API || 'https://dev.rejuve.bio:5051' }}" >> .env
+
         echo "=== .env file created successfully ==="
         cat .env
 
